@@ -17,7 +17,7 @@ parameters:
                   Configure / toggle support display options.
             type: bitmask
             bit:
-                0: CRAFT_NAME
+                0: CRAFT_NAME (hardcoded)
                 1: DISARMED
                 2: GPS_LAT
                 3: GPS_LON
@@ -31,30 +31,112 @@ parameters:
                 11: RSSI_VALUE
                 12: ALTITUDE
                 13: NUMERICAL_VARIO
-                # the following are reserved but not currently functional
-                14: (unused) FLYMODE
-                15: (unused) ESC_TMP
-                16: (unused) PITCH_ANGLE
-                17: (unused) ROLL_ANGLE
+                14: FLYMODE
+                15: ESC_TMP
+                16: PITCH_ANGLE
+                17: ROLL_ANGLE
                 18: CROSSHAIRS
-                19: AVG_CELL_VOLTAGE
-                20: (unused) HORIZON_SIDEBARS
-                21: POWER
-            default: 16383
+                19: HORIZON_SIDEBARS
+                20: POWER
+                21: AIRSPEED
+                22: STALL_WARNING
+                23: HEADING
+                24: WARNING
+                25: ARTIFICIAL_HORIZON
+                26: ALT_MAX_WARNING
+                27: G_METER
+                28: ESC_RPM
+                29: ESC_AMP
+                30: PULL_POT
+                31: THROTTLE
+            default: 266623474
 
-        # OSD Crosshairs Vertical Position
+        # OSD Crosshairs Vertical Offset
         OSD_CH_HEIGHT:
             description:
-                short: OSD Crosshairs Height
+                short: OSD Crosshairs Vertical Offset
                 long: |
-                  Controls the vertical position of the crosshair display.
-                  Resolution is limited by OSD to 15 discrete values. Negative
-                  values will display the crosshairs below the horizon
+                  Controls the vertical offset of the crosshair from center position (26, 10).
+                  Positive values move the crosshair down, negative values move it up.
+                  Range: -10 (top of screen) to +9 (bottom of screen).
             type: int32
             default: 0
-            min: -8
-            max: 8
+            min: -10
+            max: 9
 
+        # OSD Artificial Horizon Width
+        OSD_AH_WIDTH:
+            description:
+                short: Artificial Horizon Width
+                long: |
+                  Width of the artificial horizon bar in characters (centered on crosshair).
+                  Range: 3 to 45 characters. Default: 25.
+            type: int32
+            default: 25
+            min: 3
+            max: 45
+
+        # OSD Artificial Horizon Pitch Offset
+        OSD_AH_OFFSET:
+            description:
+                short: Artificial Horizon Pitch Offset
+                long: |
+                  Pitch offset in degrees to compensate for PX4 mounting misalignment.
+                  Positive values shift the horizon up (nose down correction).
+                  Range: -10 to +10 degrees. Default: 0.
+            type: float
+            default: 0.0
+            min: -10.0
+            max: 10.0
+            decimal: 1
+
+        # OSD Artificial Horizon Mode
+        OSD_AH_MODE:
+            description:
+                short: Artificial Horizon Mode
+                long: |
+                  Display mode for the artificial horizon:
+                  0 = Moving horizon (classic, pitch ladder not available)
+                  1 = Fixed horizon (pitch ladder available via OSD_LADDER_SIDE)
+            type: enum
+            values:
+                0: Moving
+                1: Fixed
+            default: 1
+
+        # OSD Pitch Ladder Side
+        OSD_LADDER_SIDE:
+            description:
+                short: Pitch Ladder Graduations Side
+                long: |
+                  Which side(s) to display pitch ladder graduations.
+                  This parameter only applies when OSD_AH_MODE = 1 (Fixed horizon).
+                  When OSD_AH_MODE = 0 (Moving), this parameter is ignored.
+                  1 = Left side only
+                  2 = Right side only
+                  3 = Both sides
+            type: enum
+            values:
+                1: Left
+                2: Right
+                3: Both
+            default: 1
+
+        OSD_LADDER_STEP:
+            description:
+                short: Pitch Ladder Graduation Step
+                long: |
+                  Angular spacing between pitch ladder graduations.
+                  This parameter only applies when OSD_AH_MODE = 1 (Fixed horizon).
+                  5° = Dense ladder, 30° = Sparse ladder
+            type: enum
+            values:
+                5: 5°
+                10: 10°
+                15: 15°
+                20: 20°
+                30: 30°
+            default: 20
 
         # OSD Log Level
         OSD_LOG_LEVEL:
@@ -104,7 +186,653 @@ parameters:
                 short: OSD RC Stick commands
                 long: |
                     Forward RC stick input to VTX when disarmed
+            type: enum
+            values:
+                0: Disabled
+                1: Enabled
+            default: 1
+
+        # Speed Unit (applies to GPS Speed and Airspeed)
+        OSD_SPEED_UNIT:
+            description:
+                short: Speed Display Unit
+                long: |
+                    Speed display unit for GPS Speed and Airspeed
+            type: enum
+            values:
+                0: m/s
+                1: km/h
+            default: 1
+
+        # GPS Speed Type
+        OSD_GPS_SPDTYPE:
+            description:
+                short: GPS Speed Calculation Type
+                long: |
+                    GPS speed calculation type
+            type: enum
+            values:
+                0: 2D Horizontal (Ground Speed)
+                1: 3D Total (Including Vertical)
+            default: 1
+
+        # Airspeed Source
+        OSD_ASPD_SRC:
+            description:
+                short: Airspeed Source
+                long: |
+                    Airspeed data source
+            type: enum
+            values:
+                0: IAS (Indicated)
+                1: CAS (Calibrated)
+                2: TAS (True)
+                3: CAS Ground-Wind
+                4: TAS Ground-Wind
+            default: 2
+
+        # Stall Warning Test Mode
+        OSD_STALL_TEST:
+            description:
+                short: Stall Warning Test
+                long: |
+                    Force stall warning flash for testing
+            type: enum
+            values:
+                0: Disabled
+                1: Test Mode
+            default: 0
+
+        OSD_MAX_ALT:
+            description:
+                short: Maximum Altitude Warning (m)
+                long: |
+                    Maximum altitude above takeoff point in meters. When exceeded, displays orange warning. Set to 0 to disable.
             type: int32
             min: 0
-            max: 1
+            max: 500
+            default: 0
+
+        OSD_MAX_ALT_TEST:
+            description:
+                short: Max Altitude Warning Test
+                long: |
+                    Force max altitude warning display for testing
+            type: enum
+            values:
+                0: Disabled
+                1: Test Mode
+            default: 0
+
+        OSD_MAX_G:
+            description:
+                short: Maximum G-Force Limit
+                long: |
+                    Maximum G-force limit. Display changes color: white (normal), orange (>80% limit), red (>limit). Set to 0 to disable color coding.
+            type: float
+            min: 0.0
+            max: 20.0
+            default: 8.0
+            decimal: 1
+
+        OSD_PULLPOT_SRC:
+            description:
+                short: PullPot source
+                long: |
+                    Source used for PullPot limit computation.
+                    Formula mode uses FW_AIRSPD_STALL.
+                    CSV mode reads the file /fs/microsd/vn_limits.csv at startup, stores it in RAM,
+                    then interpolates g_max from TAS.
+                    File name on SD must be exactly: vn_limits.csv
+                    Expected line format: TAS_m_s,g_max
+                    Example lines:
+                    39,0.833
+                    84,3.8
+            type: enum
+            values:
+                0: Stall Speed (Vs)
+                1: CSV on SD
+            default: 0
+
+        OSD_PULLPOT_TEST:
+            description:
+                short: PullPot Test Mode
+                long: |
+                    Force PullPot test mode:
+                    - fixed load factor at 3.0g
+                    - TAS varies automatically over time
+                    Useful to validate PullPot display behavior on the bench.
+            type: enum
+            values:
+                0: Disabled
+                1: Test Mode
+            default: 0
+
+        # ========================================
+        # OSD Element Positions (53x20 grid - Walksnail/DJI HD)
+        # Position encoding: pos = 2048 + X + (Y * 32)
+        # Enable/Disable via OSD_SYMBOLS bitmask above
+        # ========================================
+
+        # Max Altitude Warning Position
+        OSD_MAX_ALT_X:
+            description:
+                short: Max Altitude Warning X position
+            type: int32
+            min: 0
+            max: 52
+            default: 17
+
+        OSD_MAX_ALT_Y:
+            description:
+                short: Max Altitude Warning Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 8
+
+        # G-Meter Position
+        OSD_GMETER_X:
+            description:
+                short: G-Meter X position
+            type: int32
+            min: 0
+            max: 52
+            default: 45
+
+        OSD_GMETER_Y:
+            description:
+                short: G-Meter Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 15
+
+        # Pull Potential Position
+        OSD_PULLPOT_X:
+            description:
+                short: PullPot X position
+            type: int32
+            min: 0
+            max: 52
+            default: 23
+
+        OSD_PULLPOT_Y:
+            description:
+                short: PullPot Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 9
+
+        # GPS Latitude Position
+        OSD_GPSLAT_X:
+            description:
+                short: GPS Latitude X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_GPSLAT_Y:
+            description:
+                short: GPS Latitude Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 16
+
+        # GPS Longitude Position
+        OSD_GPSLON_X:
+            description:
+                short: GPS Longitude X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_GPSLON_Y:
+            description:
+                short: GPS Longitude Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 15
+
+        # GPS Satellites Position
+        OSD_SATS_X:
+            description:
+                short: GPS Satellites X position
+            type: int32
+            min: 0
+            max: 52
+            default: 5
+
+        OSD_SATS_Y:
+            description:
+                short: GPS Satellites Y position
+            type: int32
+            min: 0
+            max: 19
             default: 1
+
+        # GPS Speed Position
+        OSD_GSPD_X:
+            description:
+                short: GPS Speed X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_GSPD_Y:
+            description:
+                short: GPS Speed Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 1
+
+        # Airspeed Position
+        OSD_ASPD_X:
+            description:
+                short: Airspeed X position
+            type: int32
+            min: 0
+            max: 52
+            default: 25
+
+        OSD_ASPD_Y:
+            description:
+                short: Airspeed Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 12
+
+        # Stall Warning Position
+        OSD_STALL_X:
+            description:
+                short: Stall Warning X position
+            type: int32
+            min: 0
+            max: 52
+            default: 24
+
+        OSD_STALL_Y:
+            description:
+                short: Stall Warning Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 5
+
+        # Home Distance Position
+        OSD_HDIST_X:
+            description:
+                short: Home Distance X position
+            type: int32
+            min: 0
+            max: 52
+            default: 24
+
+        OSD_HDIST_Y:
+            description:
+                short: Home Distance Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 3
+
+        # Home Direction Position
+        OSD_HDIR_X:
+            description:
+                short: Home Direction X position
+            type: int32
+            min: 0
+            max: 52
+            default: 26
+
+        OSD_HDIR_Y:
+            description:
+                short: Home Direction Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 4
+
+        # Altitude Position
+        OSD_ALT_X:
+            description:
+                short: Altitude X position
+            type: int32
+            min: 0
+            max: 52
+            default: 25
+
+        OSD_ALT_Y:
+            description:
+                short: Altitude Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 11
+
+        # Main Battery Voltage Position
+        OSD_BATVOLT_X:
+            description:
+                short: Battery Voltage X position
+            type: int32
+            min: 0
+            max: 52
+            default: 25
+
+        OSD_BATVOLT_Y:
+            description:
+                short: Battery Voltage Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 13
+
+        # Current Draw Position
+        OSD_CURRENT_X:
+            description:
+                short: Battery Current X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_CURRENT_Y:
+            description:
+                short: Battery Current Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 6
+
+
+        # mAh Drawn Position
+        OSD_MAH_X:
+            description:
+                short: mAh Drawn X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_MAH_Y:
+            description:
+                short: mAh Drawn Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 8
+
+        # RSSI Position
+        OSD_RSSI_X:
+            description:
+                short: RSSI X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_RSSI_Y:
+            description:
+                short: RSSI Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 0
+
+        # Throttle Position
+        OSD_THR_X:
+            description:
+                short: Throttle X position
+            type: int32
+            min: 0
+            max: 52
+            default: 25
+
+        OSD_THR_Y:
+            description:
+                short: Throttle Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 14
+
+        # Power (Watts) Position
+        OSD_POWER_X:
+            description:
+                short: Power X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_POWER_Y:
+            description:
+                short: Power Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 7
+
+        # Craft Name / Message Position
+        OSD_MSG_X:
+            description:
+                short: Message X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_MSG_Y:
+            description:
+                short: Message Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 17
+
+        # Disarmed Indicator Position
+        OSD_DISARM_X:
+            description:
+                short: Disarmed Indicator X position
+            type: int32
+            min: 0
+            max: 52
+            default: 14
+
+        OSD_DISARM_Y:
+            description:
+                short: Disarmed Indicator Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 3
+
+        # Numerical Vario Position
+        OSD_VARIO_X:
+            description:
+                short: Vertical Speed X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_VARIO_Y:
+            description:
+                short: Vertical Speed Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 13
+
+        # Flight Mode Position
+        OSD_FLYMODE_X:
+            description:
+                short: Flight Mode X position
+            type: int32
+            min: 0
+            max: 52
+            default: 32
+
+        OSD_FLYMODE_Y:
+            description:
+                short: Flight Mode Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 3
+
+        # Flight Mode Format
+        OSD_FMODE_SIZE:
+            description:
+                short: Flight Mode Display Format
+                long: |
+                  Choose between short (3 chars) or long (full name) format for flight mode display.
+            type: enum
+            values:
+                0: Short (3 chars)
+                1: Long (full name)
+            default: 1
+
+        # Heading Position
+        OSD_HEADING_X:
+            description:
+                short: Heading X position
+            type: int32
+            min: 0
+            max: 52
+            default: 17
+
+        OSD_HEADING_Y:
+            description:
+                short: Heading Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 0
+
+        # Warning Position
+        OSD_WARN_X:
+            description:
+                short: Warning X position
+            type: int32
+            min: 0
+            max: 52
+            default: 12
+
+        OSD_WARN_Y:
+            description:
+                short: Warning Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 17
+
+        # ESC Temperature Position
+        OSD_ESC_X:
+            description:
+                short: ESC Temperature X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_ESC_Y:
+            description:
+                short: ESC Temperature Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 3
+
+        # ESC RPM Position
+        OSD_ESC_RPM_X:
+            description:
+                short: ESC RPM X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_ESC_RPM_Y:
+            description:
+                short: ESC RPM Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 5
+
+        OSD_ESC_AMP_X:
+            description:
+                short: ESC Current X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_ESC_AMP_Y:
+            description:
+                short: ESC Current Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 4
+
+        # Horizon Sidebars Position (Left bar)
+        OSD_HORIZ_L_X:
+            description:
+                short: Horizon Left Sidebar X position
+            type: int32
+            min: 0
+            max: 52
+            default: 5
+
+        # Horizon Sidebars Position (Right bar)
+        OSD_HORIZ_R_X:
+            description:
+                short: Horizon Right Sidebar X position
+            type: int32
+            min: 0
+            max: 52
+            default: 47
+
+        # Pitch Angle Position
+        OSD_PITCH_X:
+            description:
+                short: Pitch Angle X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_PITCH_Y:
+            description:
+                short: Pitch Angle Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 10
+
+        # Roll Angle Position
+        OSD_ROLL_X:
+            description:
+                short: Roll Angle X position
+            type: int32
+            min: 0
+            max: 52
+            default: 0
+
+        OSD_ROLL_Y:
+            description:
+                short: Roll Angle Y position
+            type: int32
+            min: 0
+            max: 19
+            default: 11

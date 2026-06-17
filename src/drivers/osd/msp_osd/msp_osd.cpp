@@ -44,6 +44,7 @@
 
 #include <fcntl.h>
 #include <math.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <termios.h>
 #include <string.h>
@@ -54,6 +55,7 @@
 #include <px4_platform_common/posix.h>
 
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/rc_channels.h>
 #include <uORB/topics/sensor_combined.h>
 #include <uORB/topics/power_monitor.h>
 #include <uORB/topics/battery_status.h>
@@ -66,54 +68,19 @@
 
 #include "MspV1.hpp"
 
-//OSD elements positions
-//in betaflight configurator set OSD elements to your desired positions and in CLI type "set osd" to retreieve the numbers.
-//234 -> not visible. Horizontally 2048-2074(spacing 1), vertically 2048-2528(spacing 32). 26 characters X 15 lines
-
-// Currently working elements positions (hardcoded)
-
-/* center col
-
-Speed Power Alt
-Rssi cell_voltage mah
-craft name
-
-*/
-
-// Left
-const uint16_t osd_gps_lat_pos = 2048;
-const uint16_t osd_gps_lon_pos = 2080;
-const uint16_t osd_gps_sats_pos = 2112;
-
-// Center
-// Top
-const uint16_t osd_disarmed_pos = 2125;
-const uint16_t osd_home_dir_pos = 2093;
-const uint16_t osd_home_dist_pos = 2095;
-
-// Bottom row 1
-const uint16_t osd_gps_speed_pos = 2413;
-const uint16_t osd_power_pos = 2415;
-const uint16_t osd_altitude_pos = 2416;
-
-// Bottom Row 2
-const uint16_t osd_rssi_value_pos = 2445;
-const uint16_t osd_avg_cell_voltage_pos = 2446;
-const uint16_t osd_mah_drawn_pos = 2449;
-
-// Bottom Row 3
-const uint16_t osd_craft_name_pos = 2480;
-const uint16_t osd_crosshairs_pos = 2319;
-
-// Right
-const uint16_t osd_main_batt_voltage_pos = 2073;
-const uint16_t osd_current_draw_pos = 2103;
-
-
-const uint16_t osd_numerical_vario_pos = LOCATION_HIDDEN;
+//OSD elements positions are now configured via parameters
+// Position encoding: 2048 + X + (Y * 32)
+// X range: 0-29, Y range: 0-15
+// Position 0 = hidden
 
 #define OSD_GRID_COL_MAX (59) // From betaflight-configurator OSD tab
 #define OSD_GRID_ROW_MAX (21) // From betaflight-configurator OSD tab
+
+// Helper template to calculate dynamic struct size based on str_length
+template<typename T>
+static inline size_t calc_rendor_size(const T& rendor) {
+	return offsetof(T, str) + rendor.str_length;
+}
 
 typedef enum {
 	MSP_DP_HEARTBEAT = 0,         // Release the display after clearing and updating
@@ -127,15 +94,20 @@ typedef enum {
 } displayportMspSubCommand;
 
 
+#define OSD_GRID_COL_MAX (59) // From betaflight-configurator OSD tab
+#define OSD_GRID_ROW_MAX (21) // From betaflight-configurator OSD tab
+
+
 MspOsd::MspOsd(const char *device) :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::lp_default)
 {
-	_display.set_period(_param_osd_scroll_rate.get() * 1000ULL);
-	_display.set_dwell(_param_osd_dwell_time.get() * 1000ULL);
-
 	// back up device name for connection later
 	strcpy(_device, device);
+
+	// Configure warning display scrolling
+	_warning_display.set_period(125'000);  // 125ms scroll period
+	_warning_display.set_dwell(500'000);   // 500ms dwell at start
 
 	// _is_initialized = true;
 	PX4_INFO("MSP OSD running on %s", _device);
@@ -147,6 +119,9 @@ MspOsd::~MspOsd()
 
 bool MspOsd::init()
 {
+	updateParams();
+	parameters_update();
+
 	ScheduleOnInterval(100_ms);
 
 	return true;
@@ -165,34 +140,44 @@ void MspOsd::SendConfig()
 	msp_osd_config.osdprofileindex = 1;                // 1
 	msp_osd_config.overlay_radio_mode = 0;             //  0
 
-	// display conditional elements
-	msp_osd_config.osd_craft_name_pos = enabled(SymbolIndex::CRAFT_NAME) ? osd_craft_name_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_disarmed_pos = enabled(SymbolIndex::DISARMED) ? osd_disarmed_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_gps_lat_pos = enabled(SymbolIndex::GPS_LAT) ? osd_gps_lat_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_gps_lon_pos = enabled(SymbolIndex::GPS_LON) ? osd_gps_lon_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_gps_sats_pos = enabled(SymbolIndex::GPS_SATS) ? osd_gps_sats_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_gps_speed_pos = enabled(SymbolIndex::GPS_SPEED) ? osd_gps_speed_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_home_dist_pos = enabled(SymbolIndex::HOME_DIST) ? osd_home_dist_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_home_dir_pos = enabled(SymbolIndex::HOME_DIR) ? osd_home_dir_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_main_batt_voltage_pos = enabled(SymbolIndex::MAIN_BATT_VOLTAGE) ? osd_main_batt_voltage_pos :
-			LOCATION_HIDDEN;
-	msp_osd_config.osd_current_draw_pos = enabled(SymbolIndex::CURRENT_DRAW) ? osd_current_draw_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_mah_drawn_pos = enabled(SymbolIndex::MAH_DRAWN) ? osd_mah_drawn_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_rssi_value_pos = enabled(SymbolIndex::RSSI_VALUE) ? osd_rssi_value_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_altitude_pos = enabled(SymbolIndex::ALTITUDE) ? osd_altitude_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_numerical_vario_pos = enabled(SymbolIndex::NUMERICAL_VARIO) ? osd_numerical_vario_pos :
-			LOCATION_HIDDEN;
+	// display conditional elements - use parameters for positions
+	msp_osd_config.osd_craft_name_pos = enabled(SymbolIndex::CRAFT_NAME) ?
+		calculate_position(_param_osd_msg_x.get(), _param_osd_msg_y.get()) : 0;
+	msp_osd_config.osd_disarmed_pos = enabled(SymbolIndex::DISARMED) ?
+		calculate_position(_param_osd_disarm_x.get(), _param_osd_disarm_y.get()) : 0;
+	msp_osd_config.osd_gps_lat_pos = enabled(SymbolIndex::GPS_LAT) ?
+		calculate_position(_param_osd_gpslat_x.get(), _param_osd_gpslat_y.get()) : 0;
+	msp_osd_config.osd_gps_lon_pos = enabled(SymbolIndex::GPS_LON) ?
+		calculate_position(_param_osd_gpslon_x.get(), _param_osd_gpslon_y.get()) : 0;
+	msp_osd_config.osd_gps_sats_pos = enabled(SymbolIndex::GPS_SATS) ?
+		calculate_position(_param_osd_sats_x.get(), _param_osd_sats_y.get()) : 0;
+	msp_osd_config.osd_gps_speed_pos = enabled(SymbolIndex::GPS_SPEED) ?
+		calculate_position(_param_osd_gspd_x.get(), _param_osd_gspd_y.get()) : 0;
+	msp_osd_config.osd_home_dist_pos = enabled(SymbolIndex::HOME_DIST) ?
+		calculate_position(_param_osd_hdist_x.get(), _param_osd_hdist_y.get()) : 0;
+	msp_osd_config.osd_home_dir_pos = enabled(SymbolIndex::HOME_DIR) ?
+		calculate_position(_param_osd_hdir_x.get(), _param_osd_hdir_y.get()) : 0;
+	msp_osd_config.osd_main_batt_voltage_pos = enabled(SymbolIndex::MAIN_BATT_VOLTAGE) ?
+		calculate_position(_param_osd_batvolt_x.get(), _param_osd_batvolt_y.get()) : 0;
+	msp_osd_config.osd_current_draw_pos = enabled(SymbolIndex::CURRENT_DRAW) ?
+		calculate_position(_param_osd_current_x.get(), _param_osd_current_y.get()) : 0;
+	msp_osd_config.osd_mah_drawn_pos = enabled(SymbolIndex::MAH_DRAWN) ?
+		calculate_position(_param_osd_mah_x.get(), _param_osd_mah_y.get()) : 0;
+	msp_osd_config.osd_rssi_value_pos = enabled(SymbolIndex::RSSI_VALUE) ?
+		calculate_position(_param_osd_rssi_x.get(), _param_osd_rssi_y.get()) : 0;
+	msp_osd_config.osd_altitude_pos = enabled(SymbolIndex::ALTITUDE) ?
+		calculate_position(_param_osd_alt_x.get(), _param_osd_alt_y.get()) : 0;
+	msp_osd_config.osd_numerical_vario_pos = enabled(SymbolIndex::NUMERICAL_VARIO) ?
+		calculate_position(_param_osd_vario_x.get(), _param_osd_vario_y.get()) : 0;
 
-	msp_osd_config.osd_power_pos = enabled(SymbolIndex::POWER) ? osd_power_pos : LOCATION_HIDDEN;
-	msp_osd_config.osd_avg_cell_voltage_pos = enabled(SymbolIndex::AVG_CELL_VOLTAGE) ? osd_avg_cell_voltage_pos :
-			LOCATION_HIDDEN;
+	msp_osd_config.osd_power_pos = enabled(SymbolIndex::POWER) ?
+		calculate_position(_param_osd_power_x.get(), _param_osd_power_y.get()) : 0;
+	msp_osd_config.osd_throttle_pos_pos = enabled(SymbolIndex::THROTTLE) ?
+		calculate_position(_param_osd_thr_x.get(), _param_osd_thr_y.get()) : 0;
 
-	// the location of our crosshairs can change
-	msp_osd_config.osd_crosshairs_pos = LOCATION_HIDDEN;
-
-	if (enabled(SymbolIndex::CROSSHAIRS)) {
-		msp_osd_config.osd_crosshairs_pos = osd_crosshairs_pos - 32 * _param_osd_ch_height.get();
-	}
+	// crosshairs position (fixed center: 26, 10)
+	msp_osd_config.osd_crosshairs_pos = enabled(SymbolIndex::CROSSHAIRS) ?
+		calculate_position(26, 10 - _param_osd_ch_height.get()) : 0;
 
 	// possibly available, but not currently used
 	msp_osd_config.osd_flymode_pos = 			LOCATION_HIDDEN;
@@ -205,7 +190,7 @@ void MspOsd::SendConfig()
 	msp_osd_config.osd_artificial_horizon_pos = 		LOCATION_HIDDEN;
 	msp_osd_config.osd_item_timer_1_pos = 			LOCATION_HIDDEN;
 	msp_osd_config.osd_item_timer_2_pos = 			LOCATION_HIDDEN;
-	msp_osd_config.osd_throttle_pos_pos = 			LOCATION_HIDDEN;
+	// throttle position is configured above when THROTTLE symbol is enabled
 	msp_osd_config.osd_vtx_channel_pos = 			LOCATION_HIDDEN;
 	msp_osd_config.osd_roll_pids_pos = 			LOCATION_HIDDEN;
 	msp_osd_config.osd_pitch_pids_pos = 			LOCATION_HIDDEN;
@@ -257,6 +242,9 @@ void MspOsd::Run()
 		_parameter_update_sub.copy(&param_update);
 		updateParams(); // update module parameters (in DEFINE_PARAMETERS)
 		parameters_update();
+
+		// Send updated config to OSD when parameters change
+		SendConfig();
 	}
 
 	// perform first time initialization, if needed
@@ -280,6 +268,9 @@ void MspOsd::Run()
 		_msp = MspV1(_msp_fd);
 
 		_is_initialized = true;
+
+		// Send initial config to OSD
+		SendConfig();
 	}
 
 	if (change_channel) {
@@ -299,43 +290,88 @@ void MspOsd::Run()
 		this->Send(MSP_GET_VTX_CONFIG, nullptr, 0);
 	}
 
-	// avoid premature pessimization; if skip processing if we're effectively disabled
-	if (_param_osd_symbols.get() == 0) {
-		return;
-	}
-
+	// Always send heartbeat and clear screen, even if all symbols disabled
 	uint8_t subcmd = MSP_DP_HEARTBEAT;
 	this->Send(MSP_CMD_DISPLAYPORT, &subcmd, 1);
 
 	subcmd = MSP_DP_CLEAR_SCREEN;
 	this->Send(MSP_CMD_DISPLAYPORT, &subcmd, 1);
 
-	// update display message
+	// Skip telemetry processing if all symbols disabled
+	if (_param_osd_symbols.get() == 0) {
+		// Just send DRAW_SCREEN to clear the OSD
+		subcmd = MSP_DP_DRAW_SCREEN;
+		this->Send(MSP_CMD_DISPLAYPORT, &subcmd, 1);
+		return;
+	}
+
+	// Artificial Horizon (drawn FIRST so it's behind everything else)
 	{
-		vehicle_status_s vehicle_status{};
-		_vehicle_status_sub.copy(&vehicle_status);
+		if (enabled(SymbolIndex::ARTIFICIAL_HORIZON)) {
+			vehicle_attitude_s vehicle_attitude{};
+			_vehicle_attitude_sub.copy(&vehicle_attitude);
 
-		vehicle_attitude_s vehicle_attitude{};
-		_vehicle_attitude_sub.copy(&vehicle_attitude);
+			int crosshair_y = 10 + _param_osd_ch_height.get();
+			int crosshair_x = 26;
+			int ladder_width = _param_osd_ah_width.get();
+			int ah_mode = _param_osd_ah_mode.get();
+			int ladder_side = _param_osd_ladder_side.get();
+			int ladder_step = _param_osd_ladder_step.get();
+			float pitch_offset = _param_osd_ah_offset.get();
 
-		log_message_s log_message{};
-		_log_message_sub.copy(&log_message);
-		// TODO re-wirte this function?
-		const auto display_message = msp_osd::construct_display_message(
-						     vehicle_status,
-						     vehicle_attitude,
-						     log_message,
-						     _param_osd_log_level.get(),
-						     _display);
+			// Mode 0: Moving horizon (classic - old style, no ladder)
+			if (ah_mode == 0) {
+				msp_rendor_horizon_bar_t horizon_bar{};
+				msp_rendor_horizon_cursor_t cursor_left{};
+				msp_rendor_horizon_cursor_t cursor_right{};
+
+				msp_osd::construct_rendor_ARTIFICIAL_HORIZON(vehicle_attitude, crosshair_y, crosshair_x,
+					ladder_width, pitch_offset, horizon_bar, cursor_left, cursor_right);
+
+				this->Send(MSP_CMD_DISPLAYPORT, &horizon_bar, calc_rendor_size(horizon_bar));
+				this->Send(MSP_CMD_DISPLAYPORT, &cursor_left, sizeof(cursor_left));
+				this->Send(MSP_CMD_DISPLAYPORT, &cursor_right, sizeof(cursor_right));
+			}
+			// Mode 1: Fixed horizon (ladder configured via OSD_LADDER_SIDE)
+			else {
+				const int max_ladder_lines = 25;
+				msp_rendor_pitch_ladder_line_t ladder_lines[max_ladder_lines];
+
+				// Use ladder_side param (1=left, 2=right, 3=both)
+				int num_lines = msp_osd::construct_rendor_PITCH_LADDER(
+					vehicle_attitude,
+					crosshair_y,
+					crosshair_x,
+					ladder_width,
+					ladder_side,
+					ladder_step,
+					pitch_offset,
+					ladder_lines,
+					max_ladder_lines
+				);
+
+				// Send all pitch ladder lines
+				for (int i = 0; i < num_lines; i++) {
+					this->Send(MSP_CMD_DISPLAYPORT, &ladder_lines[i], calc_rendor_size(ladder_lines[i]));
+				}
+			}
+		}
+	}
+
+// update display message (craft name)
+	if (enabled(SymbolIndex::CRAFT_NAME)) {
+		// Craft name is hardcoded (PX4 doesn't support string parameters)
+		msp_name_t craft_name{};
+		snprintf(craft_name.craft_name, sizeof(craft_name.craft_name), "HORNET");
 
 		char msg[sizeof(msp_name_t) + 5] = {0};
 		int index = 0;
 		msg[index++] = MSP_DP_WRITE_STRING;
-		msg[index++] = 0x02; // row position
-		msg[index++] = 0x14; // colum position
+		msg[index++] = _param_osd_msg_y.get(); // Y position from parameter
+		msg[index++] = _param_osd_msg_x.get(); // X position from parameter
 		msg[index++] = 0;		// Icon attr
-		msg[index++] = 0x03; // Icon index >
-		memcpy(&msg[index++], &display_message, sizeof(msp_name_t));
+		msg[index++] = 0x00; // No icon
+		memcpy(&msg[index], &craft_name, sizeof(msp_name_t));
 		this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msg));
 	}
 
@@ -348,10 +384,21 @@ void MspOsd::Run()
 	// MSP_ANALOG
 	{
 		if (enabled(SymbolIndex::RSSI_VALUE)) {
+			rc_channels_s rc_channels{};
+			_rc_channels_sub.copy(&rc_channels);
+			auto msg = msp_osd::construct_rendor_RSSI(rc_channels);
+			// DisplayPort uses direct X/Y coordinates (not encoded)
+			msg.screenXPosition = _param_osd_rssi_x.get();
+			msg.screenYPosition = _param_osd_rssi_y.get();
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+
+		if (enabled(SymbolIndex::THROTTLE)) {
 			input_rc_s input_rc{};
 			_input_rc_sub.copy(&input_rc);
-			const auto msg = msp_osd::construct_rendor_RSSI(input_rc);
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_rssi_t));
+			auto msg = msp_osd::construct_rendor_THROTTLE(input_rc);
+			set_displayport_position(msg, _param_osd_thr_x.get(), _param_osd_thr_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
 		}
 	}
 
@@ -360,12 +407,9 @@ void MspOsd::Run()
 		battery_status_s battery_status{};
 		_battery_status_sub.copy(&battery_status);
 
+		// Send MSP_BATTERY_STATE (for DJI compatibility)
 		const auto msg_original = msp_osd::construct_BATTERY_STATE(battery_status);
 		this->Send(MSP_BATTERY_STATE, &msg_original);
-
-		const auto msg = msp_osd::construct_rendor_BATTERY_STATE(battery_status);
-		this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_battery_state_t));
-
 	}
 
 	// MSP_RAW_GPS
@@ -374,18 +418,21 @@ void MspOsd::Run()
 		_vehicle_gps_position_sub.copy(&vehicle_gps_position);
 
 		if (enabled(SymbolIndex::GPS_LAT)) {
-			const auto msg = msp_osd::construct_rendor_GPS_LAT(vehicle_gps_position);
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_latitude_t));
+			auto msg = msp_osd::construct_rendor_GPS_LAT(vehicle_gps_position);
+			set_displayport_position(msg, _param_osd_gpslat_x.get(), _param_osd_gpslat_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
 		}
 
 		if (enabled(SymbolIndex::GPS_LON)) {
-			const auto msg = msp_osd::construct_rendor_GPS_LON(vehicle_gps_position);
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_longitude_t));
+			auto msg = msp_osd::construct_rendor_GPS_LON(vehicle_gps_position);
+			set_displayport_position(msg, _param_osd_gpslon_x.get(), _param_osd_gpslon_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
 		}
 
 		if (enabled(SymbolIndex::GPS_SATS)) {
-			const auto msg = msp_osd::construct_rendor_GPS_NUM(vehicle_gps_position);
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_satellites_used_t));
+			auto msg = msp_osd::construct_rendor_GPS_NUM(vehicle_gps_position);
+			set_displayport_position(msg, _param_osd_sats_x.get(), _param_osd_sats_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
 		}
 	}
 
@@ -398,9 +445,9 @@ void MspOsd::Run()
 		_vehicle_global_position_sub.copy(&vehicle_global_position);
 
 		if (enabled(SymbolIndex::HOME_DIST)) {
-			const auto msg =  msp_osd::construct_rendor_distanceToHome(home_position, vehicle_global_position);
-
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_distanceToHome_t));
+			auto msg =  msp_osd::construct_rendor_distanceToHome(home_position, vehicle_global_position);
+			set_displayport_position(msg, _param_osd_hdist_x.get(), _param_osd_hdist_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
 		}
 	}
 
@@ -409,13 +456,29 @@ void MspOsd::Run()
 		vehicle_attitude_s vehicle_attitude{};
 		_vehicle_attitude_sub.copy(&vehicle_attitude);
 
-		{
-			const auto msg = msp_osd::construct_rendor_PITCH(vehicle_attitude);
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_pitch_t));
+		if (enabled(SymbolIndex::PITCH_ANGLE)) {
+			auto msg = msp_osd::construct_rendor_PITCH(vehicle_attitude);
+			set_displayport_position(msg, _param_osd_pitch_x.get(), _param_osd_pitch_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
 		}
-		{
-			const auto msg = msp_osd::construct_rendor_ROLL(vehicle_attitude);
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_roll_t));
+		if (enabled(SymbolIndex::ROLL_ANGLE)) {
+			auto msg = msp_osd::construct_rendor_ROLL(vehicle_attitude);
+			set_displayport_position(msg, _param_osd_roll_x.get(), _param_osd_roll_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+
+		// Horizon sidebars (left and right bars showing roll)
+		if (enabled(SymbolIndex::HORIZON_SIDEBARS)) {
+			msp_rendor_horizon_sidebar_t left, right;
+			msp_osd::construct_rendor_HORIZON_SIDEBARS(vehicle_attitude, left, right);
+
+			// Left sidebar
+			left.screenXPosition = _param_osd_horiz_l_x.get();
+			this->Send(MSP_CMD_DISPLAYPORT, &left, calc_rendor_size(left));
+
+			// Right sidebar
+			right.screenXPosition = _param_osd_horiz_r_x.get();
+			this->Send(MSP_CMD_DISPLAYPORT, &right, calc_rendor_size(right));
 		}
 	}
 
@@ -429,9 +492,351 @@ void MspOsd::Run()
 		_vehicle_local_position_sub.copy(&vehicle_local_position);
 
 		if (enabled(SymbolIndex::ALTITUDE)) {
-			const auto msg = msp_osd::construct_Rendor_ALTITUDE(vehicle_gps_position, vehicle_local_position);
+			auto msg = msp_osd::construct_Rendor_ALTITUDE(vehicle_gps_position, vehicle_local_position);
+			set_displayport_position(msg, _param_osd_alt_x.get(), _param_osd_alt_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
 
-			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_altitude_t));
+		// Vertical Speed
+		if (enabled(SymbolIndex::NUMERICAL_VARIO)) {
+			auto msg = msp_osd::construct_rendor_VSPEED(vehicle_local_position);
+			set_displayport_position(msg, _param_osd_vario_x.get(), _param_osd_vario_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Additional OSD Elements - GPS Speed
+	{
+		sensor_gps_s vehicle_gps_position{};
+		_vehicle_gps_position_sub.copy(&vehicle_gps_position);
+
+		if (enabled(SymbolIndex::GPS_SPEED)) {
+			auto msg = msp_osd::construct_rendor_GPS_SPEED(vehicle_gps_position, _param_osd_speed_unit.get(), _param_osd_gps_spdtype.get());
+			set_displayport_position(msg, _param_osd_gspd_x.get(), _param_osd_gspd_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Airspeed and Stall Warning
+	{
+		airspeed_validated_s airspeed_validated{};
+		_airspeed_validated_sub.copy(&airspeed_validated);
+
+		if (enabled(SymbolIndex::AIRSPEED)) {
+			auto msg = msp_osd::construct_rendor_AIRSPEED(airspeed_validated, _param_osd_speed_unit.get(), _param_osd_aspd_src.get());
+			set_displayport_position(msg, _param_osd_aspd_x.get(), _param_osd_aspd_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+
+		// Max Altitude Warning - Flash orange when above OSD_MAX_ALT
+		if (enabled(SymbolIndex::ALT_MAX_WARNING)) {
+			vehicle_local_position_s vehicle_local_position{};
+			_vehicle_local_position_sub.copy(&vehicle_local_position);
+			float current_alt = vehicle_local_position.z_valid ? (-vehicle_local_position.z) : 0.0f;
+			auto msg = msp_osd::construct_rendor_ALT_MAX_WARNING(current_alt, (float)_param_osd_max_alt.get(), _param_osd_max_alt_test.get() == 1);
+			set_displayport_position(msg, _param_osd_max_alt_x.get(), _param_osd_max_alt_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+
+		// Stall Warning - Flash when below FW_AIRSPD_MIN (or test mode)
+		if (enabled(SymbolIndex::STALL_WARNING)) {
+			auto msg = msp_osd::construct_rendor_STALL_WARNING(airspeed_validated, _param_fw_airspd_min.get(), _param_osd_stall_test.get() == 1);
+			set_displayport_position(msg, _param_osd_stall_x.get(), _param_osd_stall_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+
+		// G-Meter - Display G-force with dynamic color
+		if (enabled(SymbolIndex::G_METER)) {
+			sensor_combined_s sensor_combined{};
+			_sensor_combined_sub.copy(&sensor_combined);
+			auto msg = msp_osd::construct_rendor_G_METER(sensor_combined, _param_osd_max_g.get());
+			set_displayport_position(msg, _param_osd_gmeter_x.get(), _param_osd_gmeter_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+
+		// Pull Potential - Percentage of available load factor used at current TAS
+		if (enabled(SymbolIndex::PULL_POT)) {
+			airspeed_validated_s pullpot_airspeed = airspeed_validated;
+			sensor_combined_s sensor_combined{};
+			_sensor_combined_sub.copy(&sensor_combined);
+			const int32_t source = _param_osd_pullpot_src.get();
+			const bool test_mode = (_param_osd_pullpot_test.get() == 1);
+			float csv_gmax = NAN;
+
+			if (test_mode) {
+				const float now_s = static_cast<float>(hrt_absolute_time()) * 1e-6f;
+				pullpot_airspeed.true_airspeed_m_s = 50.0f + 50.0f * sinf(now_s * 0.35f);
+				sensor_combined.accelerometer_m_s2[0] = 0.0f;
+				sensor_combined.accelerometer_m_s2[1] = 0.0f;
+				sensor_combined.accelerometer_m_s2[2] = 3.0f * 9.80665f;
+			}
+
+			if (source == PULLPOT_SOURCE_CSV_SD && _pullpot_csv_loaded) {
+				csv_gmax = pullpot_csv_gmax_for_tas(pullpot_airspeed.true_airspeed_m_s);
+			}
+
+			auto msg = msp_osd::construct_rendor_PULL_POT(
+				pullpot_airspeed,
+				sensor_combined,
+				source,
+				_param_fw_airspd_stall.get(),
+				csv_gmax
+			);
+			set_displayport_position(msg, _param_osd_pullpot_x.get(), _param_osd_pullpot_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Home Direction
+	{
+		home_position_s home_position{};
+		_home_position_sub.copy(&home_position);
+
+		vehicle_global_position_s vehicle_global_position{};
+		_vehicle_global_position_sub.copy(&vehicle_global_position);
+
+		vehicle_attitude_s vehicle_attitude{};
+		_vehicle_attitude_sub.copy(&vehicle_attitude);
+
+		if (enabled(SymbolIndex::HOME_DIR)) {
+			auto msg = msp_osd::construct_rendor_HOME_DIR(home_position, vehicle_global_position, vehicle_attitude);
+			set_displayport_position(msg, _param_osd_hdir_x.get(), _param_osd_hdir_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, sizeof(msp_rendor_home_direction_t)); // Icon-only
+		}
+	}
+
+	// Power, Cell Voltage, and Battery Voltage
+	{
+		battery_status_s battery_status{};
+		_battery_status_sub.copy(&battery_status);
+
+		if (enabled(SymbolIndex::POWER)) {
+			auto msg = msp_osd::construct_rendor_POWER(battery_status);
+			set_displayport_position(msg, _param_osd_power_x.get(), _param_osd_power_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+
+		if (enabled(SymbolIndex::MAIN_BATT_VOLTAGE)) {
+			auto msg = msp_osd::construct_rendor_BATTERY_STATE(battery_status);
+			set_displayport_position(msg, _param_osd_batvolt_x.get(), _param_osd_batvolt_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Flight Mode
+	{
+		vehicle_status_s vehicle_status{};
+		_vehicle_status_sub.copy(&vehicle_status);
+
+		if (enabled(SymbolIndex::FLYMODE)) {
+			bool use_short = (_param_osd_fmode_size.get() == 0);
+			auto msg = msp_osd::construct_rendor_FLIGHT_MODE(vehicle_status, use_short);
+			set_displayport_position(msg, _param_osd_flymode_x.get(), _param_osd_flymode_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Crosshairs (3 symbols centered at 26: positions 25, 26, 27)
+	{
+		if (enabled(SymbolIndex::CROSSHAIRS)) {
+			auto msg = msp_osd::construct_rendor_CROSSHAIRS();
+			set_displayport_position(msg, 25, 10 + _param_osd_ch_height.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Heading (2 rows)
+	{
+		if (enabled(SymbolIndex::HEADING)) {
+			vehicle_attitude_s vehicle_attitude{};
+			_vehicle_attitude_sub.copy(&vehicle_attitude);
+
+			home_position_s home_position{};
+			_home_position_sub.copy(&home_position);
+
+			vehicle_global_position_s vehicle_global_position{};
+			_vehicle_global_position_sub.copy(&vehicle_global_position);
+
+			// Get heading bars (fills both row1 and row2)
+			msp_rendor_heading_t row1{};
+			msp_rendor_heading_t row2{};
+			msp_osd::construct_rendor_HEADING(vehicle_attitude, home_position, vehicle_global_position, row1, row2);
+
+			// Send top row (cardinal directions with arrow)
+			set_displayport_position(row1, _param_osd_heading_x.get(), _param_osd_heading_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &row1, calc_rendor_size(row1));
+
+			// Send bottom row (bar with ticks and arrow)
+			set_displayport_position(row2, _param_osd_heading_x.get(), _param_osd_heading_y.get() + 1);
+			this->Send(MSP_CMD_DISPLAYPORT, &row2, calc_rendor_size(row2));
+		}
+	}
+
+	// Arming status (standalone DISARMED/ARMED indicator)
+	{
+		if (enabled(SymbolIndex::DISARMED)) {
+			vehicle_status_s vehicle_status{};
+			_vehicle_status_sub.copy(&vehicle_status);
+			auto msg = msp_osd::construct_rendor_ARMING(vehicle_status);
+			set_displayport_position(msg, _param_osd_disarm_x.get(), _param_osd_disarm_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Warning messages (standalone)
+	{
+		if (enabled(SymbolIndex::WARNING)) {
+			log_message_s log_message{};
+			_log_message_sub.copy(&log_message);
+
+			uint8_t log_level = log_message.severity;
+			uint8_t osd_log_level = _param_osd_log_level.get();
+
+			// Filter: only show messages with severity <= OSD_LOG_LEVEL
+			// (0=EMERG is most critical, 7=DEBUG is least)
+			if (log_level <= osd_log_level) {
+				// Message passes filter, process and display
+			if (log_level != _last_log_level || log_message.text[0] != '\0') {
+				// Get severity prefix
+				const char *prefix;
+				switch (log_level) {
+				case 0: prefix = "EMERG: "; break;
+				case 1: prefix = "ALERT: "; break;
+				case 2: prefix = "CRIT: "; break;
+				case 3: prefix = "ERROR: "; break;
+				case 4: prefix = "WARN: "; break;
+				case 5: prefix = "NOTICE: "; break;
+				case 6: prefix = "INFO: "; break;
+				case 7: prefix = "DEBUG: "; break;
+				default: prefix = ""; break;
+				}
+
+				// Store prefix for display
+				strncpy(_last_warning_prefix, prefix, sizeof(_last_warning_prefix) - 1);
+				_last_warning_prefix[sizeof(_last_warning_prefix) - 1] = '\0';
+
+				// Copy and sanitize text (Betaflight uses 0x60-0xFF for glyphs!)
+				char sanitized_text[128];
+				int dst_idx = 0;
+				for (int i = 0; i < (int)sizeof(log_message.text) && log_message.text[i] != '\0' && dst_idx < 127; i++) {
+					unsigned char c = (unsigned char)log_message.text[i];
+
+					// Betaflight ASCII safe zone: 0x20-0x5F only
+					if (c >= 0x20 && c <= 0x5F) {
+						// Safe ASCII (space to underscore)
+						sanitized_text[dst_idx++] = c;
+					} else if (c >= 0x61 && c <= 0x7A) {
+						// Lowercase a-z → UPPERCASE (avoid glyphs 0x60-0x7F)
+						sanitized_text[dst_idx++] = c - 0x20;  // 'a' → 'A'
+					}
+					// Ignore 0x00-0x1F (control chars) and 0x80-0xFF (glyphs)
+				}
+				sanitized_text[dst_idx] = '\0';
+
+				// Set sanitized message text for scrolling
+				_warning_display.set_message(sanitized_text);
+				_last_log_level = log_level;
+				_last_warning_time = hrt_absolute_time();
+			}
+
+			// Clear after 30 seconds
+			if ((hrt_absolute_time() - _last_warning_time) > 30_s) {
+				_warning_display.set_message("");
+				_last_log_level = UINT8_MAX;
+				_last_warning_prefix[0] = '\0';
+			}
+
+			// Build display: fixed prefix + scrolled text
+			msp_rendor_warning_t msg{};
+			memset(msg.str, 0, sizeof(msg.str)); // Zero-init to avoid garbage
+
+			int prefix_len = strlen(_last_warning_prefix);
+			int text_space = 30 - prefix_len;  // Remaining space for scrolled text
+
+			if (text_space > 0) {
+				char scrolled_text[31];
+				_warning_display.get(scrolled_text, text_space, hrt_absolute_time());
+				snprintf(msg.str, sizeof(msg.str), "%s%s", _last_warning_prefix, scrolled_text);
+			} else {
+				// Prefix too long, just show prefix
+				strncpy(msg.str, _last_warning_prefix, sizeof(msg.str) - 1);
+			}
+			msg.str[sizeof(msg.str) - 1] = '\0';
+
+			// CRITICAL: Force all bytes to 0x00-0x7F to avoid Betaflight glyphs
+			for (int i = 0; i < (int)sizeof(msg.str); i++) {
+				msg.str[i] = msg.str[i] & 0x7F;  // Mask high bit
+			}
+
+			msg.str_length = strlen(msg.str);
+
+			// Color based on severity (0x00=white, 0x02=orange, 0x03=red)
+			if (log_level <= 2) {
+				msg.iconAttrs = 0x03; // Red (EMERG, ALERT, CRIT)
+			} else if (log_level <= 4) {
+				msg.iconAttrs = 0x02; // Orange (ERROR, WARN)
+			} else {
+				msg.iconAttrs = 0x00; // White (NOTICE, INFO, DEBUG)
+			}
+
+			set_displayport_position(msg, _param_osd_warn_x.get(), _param_osd_warn_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+			}
+		}
+	}
+
+	// ESC Temperature
+	{
+		if (enabled(SymbolIndex::ESC_TMP)) {
+			esc_status_s esc_status{};
+			_esc_status_sub.copy(&esc_status);
+			auto msg = msp_osd::construct_rendor_ESC_TEMP(esc_status);
+			set_displayport_position(msg, _param_osd_esc_x.get(), _param_osd_esc_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// ESC RPM
+	{
+		if (enabled(SymbolIndex::ESC_RPM)) {
+			esc_status_s esc_status{};
+			_esc_status_sub.copy(&esc_status);
+			auto msg = msp_osd::construct_rendor_ESC_RPM(esc_status);
+			set_displayport_position(msg, _param_osd_esc_rpm_x.get(), _param_osd_esc_rpm_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// ESC Current (DisplayPort)
+	{
+		if (enabled(SymbolIndex::ESC_AMP)) {
+			esc_status_s esc_status{};
+			_esc_status_sub.copy(&esc_status);
+			auto msg = msp_osd::construct_rendor_ESC_AMP(esc_status);
+			set_displayport_position(msg, _param_osd_esc_amp_x.get(), _param_osd_esc_amp_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// Current Draw (DisplayPort)
+	{
+		if (enabled(SymbolIndex::CURRENT_DRAW)) {
+			battery_status_s battery_status{};
+			_battery_status_sub.copy(&battery_status);
+			auto msg = msp_osd::construct_rendor_CURRENT(battery_status);
+			set_displayport_position(msg, _param_osd_current_x.get(), _param_osd_current_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
+		}
+	}
+
+	// MAH Drawn (DisplayPort)
+	{
+		if (enabled(SymbolIndex::MAH_DRAWN)) {
+			battery_status_s battery_status{};
+			_battery_status_sub.copy(&battery_status);
+			auto msg = msp_osd::construct_rendor_MAH(battery_status);
+			set_displayport_position(msg, _param_osd_mah_x.get(), _param_osd_mah_y.get());
+			this->Send(MSP_CMD_DISPLAYPORT, &msg, calc_rendor_size(msg));
 		}
 	}
 
@@ -540,11 +945,122 @@ void MspOsd::Receive()
 
 }
 
+void MspOsd::load_pullpot_csv()
+{
+	const char *csv_path = "/fs/microsd/vn_limits.csv";
+	FILE *fp = fopen(csv_path, "r");
+
+	_pullpot_vn_points_count = 0;
+	_pullpot_csv_loaded = false;
+
+	if (fp == nullptr) {
+		PX4_WARN("PULL_POT: csv not found: %s", csv_path);
+		return;
+	}
+
+	char line[128]{};
+
+	while (fgets(line, sizeof(line), fp) != nullptr) {
+		float tas = NAN;
+		float gmax = NAN;
+
+		int parsed = sscanf(line, " %f , %f", &tas, &gmax);
+
+		if (parsed != 2) {
+			parsed = sscanf(line, " %f ; %f", &tas, &gmax);
+		}
+
+		if (parsed != 2 || !PX4_ISFINITE(tas) || !PX4_ISFINITE(gmax) || tas <= 0.0f || gmax <= 0.0f) {
+			continue;
+		}
+
+		if (_pullpot_vn_points_count >= PULLPOT_VN_MAX_POINTS) {
+			break;
+		}
+
+		int insert_at = _pullpot_vn_points_count;
+
+		for (int i = 0; i < _pullpot_vn_points_count; i++) {
+			if (tas < _pullpot_vn_points[i].tas_m_s) {
+				insert_at = i;
+				break;
+			}
+
+			if (fabsf(tas - _pullpot_vn_points[i].tas_m_s) < 0.001f) {
+				_pullpot_vn_points[i].g_max = gmax;
+				insert_at = -1;
+				break;
+			}
+		}
+
+		if (insert_at >= 0) {
+			for (int j = _pullpot_vn_points_count; j > insert_at; j--) {
+				_pullpot_vn_points[j] = _pullpot_vn_points[j - 1];
+			}
+
+			_pullpot_vn_points[insert_at].tas_m_s = tas;
+			_pullpot_vn_points[insert_at].g_max = gmax;
+			_pullpot_vn_points_count++;
+		}
+	}
+
+	fclose(fp);
+
+	if (_pullpot_vn_points_count >= 2) {
+		_pullpot_csv_loaded = true;
+		PX4_INFO("PULL_POT: loaded %d CSV points", _pullpot_vn_points_count);
+	} else {
+		PX4_WARN("PULL_POT: not enough CSV points (%d)", _pullpot_vn_points_count);
+	}
+}
+
+float MspOsd::pullpot_csv_gmax_for_tas(float tas_m_s) const
+{
+	if (!_pullpot_csv_loaded || _pullpot_vn_points_count <= 0 || !PX4_ISFINITE(tas_m_s)) {
+		return NAN;
+	}
+
+	if (tas_m_s <= _pullpot_vn_points[0].tas_m_s) {
+		return _pullpot_vn_points[0].g_max;
+	}
+
+	if (tas_m_s >= _pullpot_vn_points[_pullpot_vn_points_count - 1].tas_m_s) {
+		return _pullpot_vn_points[_pullpot_vn_points_count - 1].g_max;
+	}
+
+	for (int i = 0; i < _pullpot_vn_points_count - 1; i++) {
+		const auto &p0 = _pullpot_vn_points[i];
+		const auto &p1 = _pullpot_vn_points[i + 1];
+
+		if (tas_m_s >= p0.tas_m_s && tas_m_s <= p1.tas_m_s) {
+			const float dt = p1.tas_m_s - p0.tas_m_s;
+
+			if (dt <= 0.0f) {
+				return p0.g_max;
+			}
+
+			const float alpha = (tas_m_s - p0.tas_m_s) / dt;
+			return p0.g_max + alpha * (p1.g_max - p0.g_max);
+		}
+	}
+
+	return _pullpot_vn_points[_pullpot_vn_points_count - 1].g_max;
+}
+
 void MspOsd::parameters_update()
 {
-	// update our display rate and dwell time
-	_display.set_period(hrt_abstime(_param_osd_scroll_rate.get() * 1000ULL));
-	_display.set_dwell(hrt_abstime(_param_osd_dwell_time.get() * 1000ULL));
+	// update our display rate and dwell time for warning display
+	_warning_display.set_period(hrt_abstime(_param_osd_scroll_rate.get() * 1000ULL));
+	_warning_display.set_dwell(hrt_abstime(_param_osd_dwell_time.get() * 1000ULL));
+
+	const int32_t source = _param_osd_pullpot_src.get();
+
+	if (source == PULLPOT_SOURCE_CSV_SD
+	    && (!_pullpot_csv_loaded || _last_pullpot_source != PULLPOT_SOURCE_CSV_SD)) {
+		load_pullpot_csv();
+	}
+
+	_last_pullpot_source = source;
 }
 
 bool MspOsd::enabled(const SymbolIndex &symbol)
@@ -615,10 +1131,53 @@ int MspOsd::print_status()
 	PX4_INFO("\tsuccessful sends: %lu", _performance_data.successful_sends);
 	PX4_INFO("\tunsuccessful sends: %lu", _performance_data.unsuccessful_sends);
 
-	// print current display string
-	char msg[FULL_MSG_BUFFER];
-	_display.get(msg, hrt_absolute_time());
-	PX4_INFO("Current message: \n\t%s", msg);
+	// print current warning message
+	char msg[31];
+	_warning_display.get(msg, 30, hrt_absolute_time());
+	PX4_INFO("Current warning: \n\t%s", msg);
+
+	if (has_vtx_config) {
+		PX4_INFO("=== VTX Configuration ===");
+
+		if (has_vtx_bands) {
+			PX4_INFO("Channel: %c%u", vtx_bands[vtx_config.user_band - 1].band_letter, vtx_config.user_channel);
+
+		} else {
+			PX4_INFO("Band: %u", vtx_config.user_band);
+			PX4_INFO("Channel: %u", vtx_config.user_channel);
+		}
+
+		PX4_INFO("Frequency: %u MHz", vtx_config.user_freq);
+
+		if (has_power_config && (vtx_config.power_level - 1) < POWER_LEVEL_COUNT) {
+			PX4_INFO("Transmit power: %.*s mW", power_levels[vtx_config.power_level - 1].power_label_length,
+				 power_levels[vtx_config.power_level - 1].power_label_name);
+
+		} else {
+			PX4_INFO("Power Level: %u/%u", vtx_config.power_level,  vtx_config.power_count);
+
+		}
+
+		PX4_INFO("PIT Mode: %s", vtx_config.pit_mode ? "On" : "Off");
+
+		const char *disarm_modes[] = {
+			"Off",
+			"Always",
+			"Until First Arm"
+		};
+
+		if (vtx_config.low_power_disarm < 3) {
+			PX4_INFO("Low Power Disarm: %s", disarm_modes[vtx_config.low_power_disarm]);
+
+		} else {
+			PX4_INFO("Low Power Disarm: Unknown (%u)", vtx_config.low_power_disarm);
+		}
+
+		PX4_INFO("PIT Frequency: %u MHz", vtx_config.pit_freq);
+
+	} else {
+		PX4_INFO("No VTX Configuration available, can't do channel switching");
+	}
 
 	if (has_vtx_config) {
 		PX4_INFO("=== VTX Configuration ===");

@@ -299,8 +299,8 @@ struct msp_rendor_pitch_t {
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00;
 	uint8_t iconIndex = 0x15; //PITCH icon
-
 	char str[6]; // -00.0
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 struct msp_rendor_roll_t {
@@ -309,8 +309,8 @@ struct msp_rendor_roll_t {
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00;
 	uint8_t iconIndex = 0x14; //ROLL icon
-
 	char str[6]; // -00.0
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 // MSP_ALTITUDE reply
@@ -327,8 +327,8 @@ struct msp_rendor_altitude_t {
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00;
 	uint8_t iconIndex = 0x7F; //ALT icon
-
-	char str[8]; // -0000.0 // 9999.9 meter
+	char str[5]; // "1234M" or "---M" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 
@@ -352,8 +352,8 @@ struct msp_rendor_rssi_t {
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00;
 	uint8_t iconIndex = 0x01; //RSSI icon
-
 	char str[4]; // 100%
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 
@@ -443,8 +443,8 @@ struct msp_rendor_latitude_t {
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00;
 	uint8_t iconIndex = 0x89; //LAT icon
-
 	char str[11]; // -00.0000000
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 
@@ -454,8 +454,8 @@ struct msp_rendor_longitude_t {
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00;
 	uint8_t iconIndex = 0x98; //LON icon
-
 	char str[12]; // -000.0000000
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 struct msp_rendor_satellites_used_t {
@@ -463,10 +463,10 @@ struct msp_rendor_satellites_used_t {
 	uint8_t screenYPosition;
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00;
-	uint8_t iconIndex = 0x1E; //satellites icon
-	uint8_t iconIndex2 = 0x1F; //satellites icon
-
+	uint8_t iconIndex = 0x1E; //satellites icon left
+	uint8_t iconIndex2 = 0x1F; //satellites icon right
 	char str[3]; // 99
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 
@@ -482,9 +482,9 @@ struct msp_rendor_distanceToHome_t {
 	uint8_t screenYPosition;
 	uint8_t screenXPosition;
 	uint8_t iconAttrs = 0x00; //
-	uint8_t iconIndex = 0x71; //distanceToHome icon
-
-	char str[6]; // 65536
+	uint8_t iconIndex = 0x11; // home icon
+	char str[5]; // "1.2Km" or "123M" or "---"
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 
@@ -790,7 +790,6 @@ struct msp_osd_config_t {
 	uint16_t osd_power_pos;
 	uint16_t osd_pidrate_profile_pos;
 	uint16_t osd_warnings_pos;
-	uint16_t osd_avg_cell_voltage_pos;
 	uint16_t osd_gps_lon_pos;
 	uint16_t osd_gps_lat_pos;
 	uint16_t osd_debug_pos;
@@ -881,7 +880,8 @@ struct msp_rendor_battery_state_t {
 	uint8_t screenXPosition;
 	uint8_t iconAttrs;
 	uint8_t iconIndex;
-	char str[5];
+	char str[4]; // "12.3V" + null
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
 } __attribute__((packed));
 
 // MSP_STATUS reply customized for BF/DJI
@@ -996,3 +996,235 @@ enum betaflightDJIModesMask_e {
 // 0b00100000 resc
 // 0b01000000 acro
 // 0b10000000 acro
+
+// Additional MSP DisplayPort render structures for missing OSD elements
+
+struct msp_rendor_gps_speed_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	uint8_t iconIndex = 0x70; // SYM_SPEED (speedometer icon)
+	char str[4]; // "125" + icon or "---" + icon (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_airspeed_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	uint8_t iconIndex = 0x70; // SYM_SPEED (same as GPS_SPEED)
+	char str[4]; // "125" + icon or "---" + icon (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_home_direction_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	uint8_t iconIndex = 0x04; // arrow symbol (will be calculated)
+} __attribute__((packed));
+
+struct msp_rendor_power_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[6]; // "1.2KW" or "999W" or "----" + W icon (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_avg_cell_voltage_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[7]; // "4.20V" + null
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_vspeed_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	uint8_t iconIndex = 0x5E; // SYM_VSPD (up/down arrow)
+	char str[5]; // "±9.9" or "---" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_flight_mode_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[8]; // flight mode name
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_crosshairs_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[3]; // 3 symbols (no null terminator)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_horizon_bar_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[45]; // Variable width (max 45 chars for full screen)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_horizon_cursor_t {
+	uint8_t subCommand = 0x01; // draw icon
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	uint8_t iconIndex;
+} __attribute__((packed));
+
+struct msp_rendor_heading_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[19]; // Graphical heading bar (19 chars, no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_arming_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs; // 0x00=white, 0x01=green, 0x02=orange, 0x03=red
+	char str[8]; // "DISARMED" or "ARMED   " (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_warning_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x42; // Orange + Blink (0x02 | 0x40)
+	char str[30]; // Warning message text
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_esc_temp_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[12]; // "ESC:123°C" with symbol (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_esc_rpm_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[12]; // "12345" + 0x12 (SYM_RPM symbol) (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_current_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[6]; // "99.9A" or "----A" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_esc_amp_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[6]; // "99.9A" or "----A" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_mah_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[12]; // "9999⚡" with SYM_MAH symbol (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_stall_warning_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x43; // Red + Blink (0x03 red | 0x40 blink)
+	char str[5]; // "STALL" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_alt_warning_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x42; // Orange + Blink (0x02 orange | 0x40 blink)
+	char str[26]; // "Alt ABOVE 123M DESCEND NOW"
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_g_meter_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs; // Dynamic: 0x00=white, 0x02=orange, 0x03=red
+	char str[8]; // "G 12.3" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_pullpot_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs; // Dynamic: 0x01=green, 0x02=orange, 0x03=red
+	char str[8]; // "75%" or ">200%" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+struct msp_rendor_throttle_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	uint8_t iconIndex = 0x04; // SYM_THR
+	char str[8]; // "75%" (no null)
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+// Horizon sidebar (single vertical bar icon)
+struct msp_rendor_horizon_sidebar_t {
+	uint8_t subCommand = 0x03; // write icon
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	uint8_t iconIndex = 0x7C; // SYM_AH_BAR (vertical bar '|')
+	char str[1]; // null terminator
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
+
+// Pitch ladder graduation line with angle text
+struct msp_rendor_pitch_ladder_line_t {
+	uint8_t subCommand = 0x03; // write string
+	uint8_t screenYPosition;
+	uint8_t screenXPosition;
+	uint8_t iconAttrs = 0x00;
+	char str[52]; // Max: 3(num) + 2(bars) + 45(max_width) + 2(bars) + 3(num) = 55, use 52 for safety
+	uint8_t str_length; // Number of chars actually used (NOT transmitted)
+} __attribute__((packed));
