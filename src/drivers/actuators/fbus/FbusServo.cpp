@@ -115,12 +115,34 @@ void FbusServo::Run()
 
 	perf_begin(_cycle_perf);
 
-	// Drain the UART (TX echo included; the protocol's adaptive filter eats it)
-	uint8_t rx_buf[128];
-	ssize_t n;
+	if (!_first_run_done) {
+		PX4_INFO("first cycle: enter");
+	}
 
-	while ((n = _serial.read(rx_buf, sizeof(rx_buf))) > 0) {
+	// Drain the UART (TX echo included; the protocol's adaptive filter eats it).
+	// Bounded, and gated on FIONREAD: on the fmu-v6xrt bench a read() on the
+	// single-wire port blocked despite O_NONBLOCK and froze the whole work
+	// queue - never call read() unless bytes are known to be waiting, and
+	// never loop unbounded on a noisy line.
+	uint8_t rx_buf[128];
+
+	for (int i = 0; i < 8; i++) {
+		if (_serial.bytesAvailable() <= 0) {
+			break;
+		}
+
+		const ssize_t n = _serial.read(rx_buf, sizeof(rx_buf));
+
+		if (n <= 0) {
+			break;
+		}
+
 		_fbus.processRx(rx_buf, (size_t)n, hrt_absolute_time());
+	}
+
+	if (!_first_run_done) {
+		_first_run_done = true;
+		PX4_INFO("first cycle: ok");
 	}
 
 	_mixing_output.update();	// calls updateOutputs() when functions are assigned

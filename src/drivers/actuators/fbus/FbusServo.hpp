@@ -122,6 +122,7 @@ private:
 	MixingOutput _mixing_output{"FBUS_SV", FBUS_OUTPUT_CHANNELS, *this, MixingOutput::SchedulingPolicy::Disabled, false, false};
 
 	bool _bus_active{false};	///< latched on first armed/prearmed/actuator-test cycle
+	bool _first_run_done{false};
 
 	// cfg mailbox (single outstanding request, guarded by _cfg_state)
 	px4::atomic<int> _cfg_state{(int)CfgState::Idle};
