@@ -414,9 +414,15 @@ ssize_t SerialImpl::write(const void *buffer, size_t buffer_size)
 	int written = ::write(_serial_fd, buffer, buffer_size);
 
 	if (written < 0) {
-		if (errno != EAGAIN) {
-			PX4_ERR("%s write error %d", _port, written);
+		// Preserve the write errno across the log call: PX4_ERR itself can
+		// clobber errno, and callers diagnose on it.
+		const int write_errno = errno;
+
+		if (write_errno != EAGAIN) {
+			PX4_ERR("%s write error %d, errno %d", _port, written, write_errno);
 		}
+
+		errno = write_errno;
 	}
 
 	return written;
