@@ -158,9 +158,9 @@ bool Serial::getSingleWireMode() const
 {
 	return _impl.getSingleWireMode();
 }
-bool Serial::setSingleWireMode()
+bool Serial::setSingleWireMode(bool push_pull, bool pull_down)
 {
-	return _impl.setSingleWireMode();
+	return _impl.setSingleWireMode(push_pull, pull_down);
 }
 
 bool Serial::getSwapRxTxMode() const

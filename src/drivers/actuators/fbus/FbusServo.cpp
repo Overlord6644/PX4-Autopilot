@@ -93,10 +93,13 @@ bool FbusServo::openSerial()
 		return false;
 	}
 
-	// FBUS is a single-wire half-duplex inverted bus on the port's TX pin.
+	// FBUS is a single-wire half-duplex inverted bus on the port's TX pin:
+	// push-pull (open-drain never reaches the high level without an external
+	// pull-up) with a pull-down for the inverted idle-low line, matching the
+	// frsky_telemetry driver and the Teensy bench behaviour.
 	// Both calls are unsupported on some platforms (e.g. SITL): warn, don't fail.
 	// Either can be skipped with the -w / -i start options for bench isolation.
-	if (_opt_singlewire && !_serial.setSingleWireMode()) {
+	if (_opt_singlewire && !_serial.setSingleWireMode(true, true)) {
 		PX4_WARN("single-wire mode not supported on %s", _device);
 	}
 

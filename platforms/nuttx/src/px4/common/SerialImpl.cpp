@@ -266,7 +266,7 @@ bool SerialImpl::open()
 
 	// Do pin operations after port has been opened
 	if (_single_wire_mode) {
-		setSingleWireMode();
+		setSingleWireMode(_single_wire_push_pull, _single_wire_pull_down);
 	}
 
 	if (_swap_rx_tx_mode) {
@@ -635,12 +635,27 @@ bool SerialImpl::getSingleWireMode() const
 	return _single_wire_mode;
 }
 
-bool SerialImpl::setSingleWireMode()
+bool SerialImpl::setSingleWireMode(bool push_pull, bool pull_down)
 {
 #if defined(TIOCSSINGLEWIRE)
+	_single_wire_push_pull = push_pull;
+	_single_wire_pull_down = pull_down;
+
+	unsigned long flags = SER_SINGLEWIRE_ENABLED;
+
+	if (push_pull) {
+		// Drive the line actively in both directions (e.g. inverted FrSky
+		// buses, whose idle level is low): open-drain never reaches the
+		// high level without an external pull-up.
+		flags |= SER_SINGLEWIRE_PUSHPULL;
+	}
+
+	if (pull_down) {
+		flags |= SER_SINGLEWIRE_PULLDOWN;
+	}
 
 	if (_open) {
-		ioctl(_serial_fd, TIOCSSINGLEWIRE, SER_SINGLEWIRE_ENABLED);
+		ioctl(_serial_fd, TIOCSSINGLEWIRE, flags);
 	}
 
 	_single_wire_mode = true;
