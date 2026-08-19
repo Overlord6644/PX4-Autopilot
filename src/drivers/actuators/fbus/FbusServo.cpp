@@ -48,8 +48,10 @@ ModuleBase::Descriptor FbusServo::desc{
 	FbusServo::print_usage,
 };
 
-FbusServo::FbusServo(const char *device) :
+FbusServo::FbusServo(const char *device, bool singlewire, bool invert) :
 	OutputModuleInterface(MODULE_NAME, px4::wq_configurations::hp_default),
+	_opt_singlewire(singlewire),
+	_opt_invert(invert),
 	_cycle_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")},
 	_frame_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": frame interval")}
 {
@@ -78,11 +80,12 @@ int FbusServo::init()
 
 	// FBUS is a single-wire half-duplex inverted bus on the port's TX pin.
 	// Both calls are unsupported on some platforms (e.g. SITL): warn, don't fail.
-	if (!_serial.setSingleWireMode()) {
+	// Either can be skipped with the -w / -i start options for bench isolation.
+	if (_opt_singlewire && !_serial.setSingleWireMode()) {
 		PX4_WARN("single-wire mode not supported on %s", _device);
 	}
 
-	if (!_serial.setInvertedMode(true)) {
+	if (_opt_invert && !_serial.setInvertedMode(true)) {
 		PX4_WARN("inverted mode not supported on %s", _device);
 	}
 
@@ -178,13 +181,18 @@ void FbusServo::Run()
 			if (written == (ssize_t)len) {
 				perf_count(_frame_perf);
 
-			} else if (!_write_fail_logged) {
-				// One-shot bench diagnostic: a TX that never drains (e.g. a
-				// port with hardware flow control baked in and CTS floating)
-				// shows up here as failing writes with no free TX space.
-				_write_fail_logged = true;
-				PX4_WARN("write returned %d of %u (errno %d), tx space %d",
-					 (int)written, (unsigned)len, errno, (int)_serial.txSpaceAvailable());
+			} else {
+				// Keep the failure details for status (dmesg drowns in the
+				// SerialImpl per-write error spam)
+				_failed_writes++;
+				_last_write_ret = written;
+				_last_write_errno = errno;
+
+				if (!_write_fail_logged) {
+					_write_fail_logged = true;
+					PX4_WARN("write returned %d of %u (errno %d), tx space %d",
+						 (int)written, (unsigned)len, errno, (int)_serial.txSpaceAvailable());
+				}
 			}
 		}
 	}
@@ -390,7 +398,11 @@ int FbusServo::print_status()
 {
 	int ret = ModuleBase::print_status();
 
-	PX4_INFO("device: %s @ %lu baud", _device, (unsigned long)FbusProtocol::BAUDRATE);
+	PX4_INFO("device: %s @ %lu baud (singlewire: %d, invert: %d)", _device,
+		 (unsigned long)FbusProtocol::BAUDRATE, _opt_singlewire, _opt_invert);
+	PX4_INFO("writes failed: %lu, last ret %d errno %d, tx space now %d",
+		 (unsigned long)_failed_writes, (int)_last_write_ret, _last_write_errno,
+		 (int)_serial.txSpaceAvailable());
 	PX4_INFO("bus active: %s", _bus_active ? "yes (transmitting)" : "no (silent until armed/prearmed/test)");
 
 	const char *echo = "unknown";
@@ -530,14 +542,24 @@ int FbusServo::custom_command(int argc, char **argv)
 int FbusServo::task_spawn(int argc, char **argv)
 {
 	const char *device = nullptr;
+	bool singlewire = true;
+	bool invert = true;
 	int myoptind = 1;
 	int ch;
 	const char *myoptarg = nullptr;
 
-	while ((ch = px4_getopt(argc, argv, "d:", &myoptind, &myoptarg)) != EOF) {
+	while ((ch = px4_getopt(argc, argv, "d:wi", &myoptind, &myoptarg)) != EOF) {
 		switch (ch) {
 		case 'd':
 			device = myoptarg;
+			break;
+
+		case 'w':
+			singlewire = false;
+			break;
+
+		case 'i':
+			invert = false;
 			break;
 
 		default:
@@ -551,7 +573,7 @@ int FbusServo::task_spawn(int argc, char **argv)
 		return PX4_ERROR;
 	}
 
-	auto *instance = new FbusServo(device);
+	auto *instance = new FbusServo(device, singlewire, invert);
 
 	if (instance) {
 		desc.object.store(instance);
@@ -599,6 +621,8 @@ FBUS_CFG parameter.
 	PRINT_MODULE_USAGE_NAME("fbus", "driver");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("start", "Start the driver");
 	PRINT_MODULE_USAGE_PARAM_STRING('d', nullptr, "<device>", "Serial device", false);
+	PRINT_MODULE_USAGE_PARAM_FLAG('w', "Disable single-wire mode (bench isolation)", true);
+	PRINT_MODULE_USAGE_PARAM_FLAG('i', "Disable signal inversion (bench isolation)", true);
 	PRINT_MODULE_USAGE_COMMAND_DESCR("cfg", "Xact servo configuration (disarmed only, ONE servo on the bus)");
 	PRINT_MODULE_USAGE_ARG("read <field> [servo_id]", "Read a field (physid|servoid|rate|range|dir|pulse|channel|center or numeric id)", true);
 	PRINT_MODULE_USAGE_ARG("write <field> <value> [servo_id]", "Write a field (verify enum order with a read first: Range differs between servo firmwares)", true);

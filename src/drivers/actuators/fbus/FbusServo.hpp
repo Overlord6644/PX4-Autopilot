@@ -72,7 +72,7 @@ public:
 
 	static ModuleBase::Descriptor desc;
 
-	explicit FbusServo(const char *device);
+	FbusServo(const char *device, bool singlewire, bool invert);
 	~FbusServo() override;
 
 	static int task_spawn(int argc, char **argv);
@@ -124,6 +124,15 @@ private:
 	bool _bus_active{false};	///< latched on first armed/prearmed/actuator-test cycle
 	bool _first_run_done{false};
 	bool _write_fail_logged{false};
+
+	// Bench isolation switches (start options -w / -i)
+	bool _opt_singlewire{true};
+	bool _opt_invert{true};
+
+	// Write-path diagnostics, shown in status
+	ssize_t _last_write_ret{0};
+	int _last_write_errno{0};
+	uint32_t _failed_writes{0};
 
 	// cfg mailbox (single outstanding request, guarded by _cfg_state)
 	px4::atomic<int> _cfg_state{(int)CfgState::Idle};
