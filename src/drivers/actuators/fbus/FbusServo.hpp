@@ -59,8 +59,10 @@
 #include <lib/perf/perf_counter.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/Serial.hpp>
+#include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/servo_status.h>
 
 class FbusServo final : public ModuleBase, public OutputModuleInterface
 {
@@ -86,7 +88,12 @@ private:
 	// Run twice per bus frame so the protocol paces the wire, not the scheduler
 	static constexpr uint32_t SCHEDULE_INTERVAL_US = 1000000 / (2 * FbusProtocol::DEFAULT_FRAME_RATE_HZ);
 
+	// servo_status publication interval: matches the ~10 Hz per-servo telemetry
+	// data rate (Xact "Data Rate" provisioned to 100 ms)
+	static constexpr uint64_t STATUS_PUB_INTERVAL_US = 100000;
+
 	void Run() override;
+	void publishServoStatus(uint64_t now);
 
 	device::Serial _serial{};
 	char _device[32] {};
@@ -95,6 +102,10 @@ private:
 	MixingOutput _mixing_output{"FBUS_SV", FBUS_OUTPUT_CHANNELS, *this, MixingOutput::SchedulingPolicy::Disabled, false, false};
 
 	bool _bus_active{false};	///< latched on first armed/prearmed/actuator-test cycle
+
+	uORB::Publication<servo_status_s> _servo_status_pub{ORB_ID(servo_status)};
+	uint64_t _last_status_pub{0};
+	uint16_t _status_counter{0};
 
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 

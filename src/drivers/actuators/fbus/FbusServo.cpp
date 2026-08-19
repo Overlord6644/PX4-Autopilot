@@ -120,6 +120,12 @@ void FbusServo::Run()
 
 	_mixing_output.update();	// calls updateOutputs()
 
+	const uint64_t now = hrt_absolute_time();
+
+	if (_bus_active && (now - _last_status_pub) >= STATUS_PUB_INTERVAL_US) {
+		publishServoStatus(now);
+	}
+
 	if (_parameter_update_sub.updated()) {
 		parameter_update_s pu;
 		_parameter_update_sub.copy(&pu);
@@ -129,6 +135,42 @@ void FbusServo::Run()
 	_mixing_output.updateSubscriptions(false);
 
 	perf_end(_cycle_perf);
+}
+
+void FbusServo::publishServoStatus(uint64_t now)
+{
+	servo_status_s status{};
+
+	status.counter = _status_counter++;
+	status.servo_count = FBUS_OUTPUT_CHANNELS;
+	status.connection_type = servo_status_s::CONNECTION_TYPE_FBUS;
+
+	// By provisioning convention the Xact servoId equals the FBUS channel it
+	// follows, so telemetry slot i reports on output channel i.
+	for (uint8_t i = 0; i < FBUS_OUTPUT_CHANNELS; i++) {
+		servo_report_s &report = status.servo[i];
+		report.actuator_function = (uint8_t)_mixing_output.outputFunction(i);
+
+		FbusProtocol::ServoTelemetry telem{};
+
+		if (_fbus.getServoTelemetry(i, now, telem)) {
+			report.voltage_v = telem.voltage_v;
+			report.current_a = telem.current_a;
+			report.temperature_degc = telem.temperature_c;
+			report.telemetry_online = true;
+			report.timestamp = telem.last_update_us;
+			status.servo_online_flags |= (uint16_t)(1u << i);
+
+		} else {
+			report.temperature_degc = INT16_MIN;
+			report.telemetry_online = false;
+			report.timestamp = now;
+		}
+	}
+
+	status.timestamp = hrt_absolute_time();
+	_servo_status_pub.publish(status);
+	_last_status_pub = now;
 }
 
 bool FbusServo::updateOutputs(float outputs[MAX_ACTUATORS], unsigned num_outputs,
