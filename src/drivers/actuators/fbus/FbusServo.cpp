@@ -37,6 +37,7 @@
 #include <px4_platform_common/getopt.h>
 #include <px4_platform_common/posix.h>
 
+#include <errno.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -171,8 +172,20 @@ void FbusServo::Run()
 		uint8_t frame[FbusProtocol::FRAME_SIZE];
 		const size_t len = _fbus.update(now, frame, sizeof(frame));
 
-		if (len > 0 && _serial.write(frame, len) == (ssize_t)len) {
-			perf_count(_frame_perf);
+		if (len > 0) {
+			const ssize_t written = _serial.write(frame, len);
+
+			if (written == (ssize_t)len) {
+				perf_count(_frame_perf);
+
+			} else if (!_write_fail_logged) {
+				// One-shot bench diagnostic: a TX that never drains (e.g. a
+				// port with hardware flow control baked in and CTS floating)
+				// shows up here as failing writes with no free TX space.
+				_write_fail_logged = true;
+				PX4_WARN("write returned %d of %u (errno %d), tx space %d",
+					 (int)written, (unsigned)len, errno, (int)_serial.txSpaceAvailable());
+			}
 		}
 	}
 

@@ -123,6 +123,7 @@ private:
 
 	bool _bus_active{false};	///< latched on first armed/prearmed/actuator-test cycle
 	bool _first_run_done{false};
+	bool _write_fail_logged{false};
 
 	// cfg mailbox (single outstanding request, guarded by _cfg_state)
 	px4::atomic<int> _cfg_state{(int)CfgState::Idle};
