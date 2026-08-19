@@ -120,11 +120,36 @@ void FbusServo::Run()
 		_fbus.processRx(rx_buf, (size_t)n, hrt_absolute_time());
 	}
 
-	_mixing_output.update();	// calls updateOutputs()
+	_mixing_output.update();	// calls updateOutputs() when functions are assigned
 
 	const uint64_t now = hrt_absolute_time();
 
-	processConfigRequest(now);
+	// No CONTROL frame before the first armed/prearmed/actuator-test cycle (or
+	// an explicit cfg request): an Xact arms on its first frame and never
+	// returns to limp, so the bus stays silent on the pad and across reboots.
+	if (!_bus_active) {
+		const actuator_armed_s &armed = _mixing_output.armed();
+
+		if (armed.armed || armed.prearmed || _mixing_output.isActuatorTestRunning()) {
+			_bus_active = true;
+			_fbus.reset(now);
+			PX4_INFO("bus activated");
+		}
+	}
+
+	processConfigRequest(now);	// may also activate the bus
+
+	// The wire pump lives here, not in updateOutputs(): MixingOutput does not
+	// call updateOutputs() while no output function is assigned, and the bus
+	// must still run for servo provisioning on a freshly configured board.
+	if (_bus_active) {
+		uint8_t frame[FbusProtocol::FRAME_SIZE];
+		const size_t len = _fbus.update(now, frame, sizeof(frame));
+
+		if (len > 0 && _serial.write(frame, len) == (ssize_t)len) {
+			perf_count(_frame_perf);
+		}
+	}
 
 	if (_bus_active && (now - _last_status_pub) >= STATUS_PUB_INTERVAL_US) {
 		publishServoStatus(now);
@@ -305,39 +330,14 @@ void FbusServo::publishServoStatus(uint64_t now)
 bool FbusServo::updateOutputs(float outputs[MAX_ACTUATORS], unsigned num_outputs,
 			      unsigned num_control_groups_updated)
 {
-	const uint64_t now = hrt_absolute_time();
-
-	// No CONTROL frame before the first armed/prearmed/actuator-test cycle:
-	// an Xact arms on its first frame and never returns to limp, so the bus
-	// stays silent on the pad and across FC reboots.
-	if (!_bus_active) {
-		const actuator_armed_s &armed = _mixing_output.armed();
-
-		if (armed.armed || armed.prearmed || _mixing_output.isActuatorTestRunning()) {
-			_bus_active = true;
-			_fbus.reset(now);
-			PX4_INFO("bus activated");
-
-		} else {
-			return false;
-		}
-	}
-
+	// Only latch the channel values; the wire pump runs from Run() so the bus
+	// also works while no output function is assigned (servo provisioning).
 	for (unsigned i = 0; i < num_outputs && i < FBUS_OUTPUT_CHANNELS; i++) {
 		if (_mixing_output.isFunctionSet(i)) {
 			_fbus.setChannel(i, (uint16_t)lroundf(outputs[i]));
 
 		} else {
 			_fbus.setChannel(i, FbusProtocol::CHANNEL_US_NEUTRAL);
-		}
-	}
-
-	uint8_t frame[FbusProtocol::FRAME_SIZE];
-	const size_t len = _fbus.update(now, frame, sizeof(frame));
-
-	if (len > 0) {
-		if (_serial.write(frame, len) == (ssize_t)len) {
-			perf_count(_frame_perf);
 		}
 	}
 
