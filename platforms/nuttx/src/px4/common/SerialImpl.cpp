@@ -195,6 +195,13 @@ bool SerialImpl::configure()
 
 	if (_flowcontrol == FlowControl::Enabled) {
 		uart_config.c_cflag |= CRTSCTS;
+
+	} else {
+		// Actively clear hardware flow control: ports whose NuttX defconfig
+		// enables IFLOW/OFLOWCONTROL (e.g. TELEM ports) otherwise keep it even
+		// though this API defaults to FlowControl::Disabled, and the
+		// transmitter stays gated by a floating CTS line.
+		uart_config.c_cflag &= ~CRTSCTS;
 	}
 
 	if (_parity != Parity::None) {
