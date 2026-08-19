@@ -35,8 +35,10 @@
 
 #include <drivers/drv_hrt.h>
 #include <px4_platform_common/getopt.h>
+#include <px4_platform_common/posix.h>
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 ModuleBase::Descriptor FbusServo::desc{
@@ -122,6 +124,8 @@ void FbusServo::Run()
 
 	const uint64_t now = hrt_absolute_time();
 
+	processConfigRequest(now);
+
 	if (_bus_active && (now - _last_status_pub) >= STATUS_PUB_INTERVAL_US) {
 		publishServoStatus(now);
 	}
@@ -135,6 +139,131 @@ void FbusServo::Run()
 	_mixing_output.updateSubscriptions(false);
 
 	perf_end(_cycle_perf);
+}
+
+void FbusServo::processConfigRequest(uint64_t now)
+{
+	const CfgState state = (CfgState)_cfg_state.load();
+
+	if (state == CfgState::Queued) {
+		if (_mixing_output.armed().armed) {
+			_cfg_state.store((int)CfgState::RejectedArmed);
+			return;
+		}
+
+		if (!_bus_active) {
+			// Deliberate operator action on the bench: wake the bus. Any servo
+			// attached from here on is armed by the control frames.
+			_bus_active = true;
+			_fbus.reset(now);
+			PX4_WARN("bus activated for servo configuration");
+		}
+
+		bool ok = false;
+
+		switch (_cfg_op) {
+		case CfgOp::Read:
+			ok = _fbus.sendConfigRead(_cfg_field, _cfg_servo_id);
+			break;
+
+		case CfgOp::Write:
+			ok = _fbus.sendConfigWrite(_cfg_field, _cfg_value, _cfg_servo_id);
+			break;
+
+		case CfgOp::Save:
+			ok = _fbus.sendConfigSave(_cfg_servo_id);
+			break;
+		}
+
+		if (!ok) {
+			_cfg_state.store((int)CfgState::Failed);
+			return;
+		}
+
+		_cfg_sent_time = now;
+		_cfg_resp_received = false;
+		_cfg_state.store((int)CfgState::InFlight);
+
+	} else if (state == CfgState::InFlight) {
+		uint8_t field = 0;
+		uint32_t value = 0;
+
+		if (_fbus.getConfigResponse(field, value)) {
+			_cfg_resp_field = field;
+			_cfg_resp_value = value;
+			_cfg_resp_received = true;
+			_cfg_state.store((int)CfgState::Done);
+
+		} else if ((now - _cfg_sent_time) > 2000000) {
+			// Save is a write-only command: not every servo firmware answers it,
+			// so a sent save without response still counts as done.
+			_cfg_state.store((int)(_cfg_op == CfgOp::Save ? CfgState::Done : CfgState::Timeout));
+		}
+	}
+}
+
+int FbusServo::runConfigRequest(CfgOp op, uint8_t field, uint32_t value, uint8_t servo_id)
+{
+	if (_cfg_state.load() != (int)CfgState::Idle) {
+		PX4_ERR("configuration request already pending");
+		return PX4_ERROR;
+	}
+
+	_cfg_op = op;
+	_cfg_field = field;
+	_cfg_value = value;
+	_cfg_servo_id = servo_id;
+	_cfg_state.store((int)CfgState::Queued);
+
+	// Poll from the shell thread until the work queue reaches a terminal state
+	CfgState state = CfgState::Queued;
+
+	for (int i = 0; i < 60; i++) {
+		px4_usleep(50000);
+		state = (CfgState)_cfg_state.load();
+
+		if (state != CfgState::Queued && state != CfgState::InFlight) {
+			break;
+		}
+	}
+
+	int ret = PX4_ERROR;
+
+	switch (state) {
+	case CfgState::Done:
+		if (_cfg_resp_received) {
+			PX4_INFO("field 0x%02X = %lu", _cfg_resp_field, (unsigned long)_cfg_resp_value);
+
+			if (_cfg_resp_field == FbusProtocol::XACT_CENTER && _cfg_resp_value > 125) {
+				PX4_INFO("center (signed): %ld", (long)_cfg_resp_value - 256);
+			}
+
+		} else {
+			PX4_INFO("save command sent (no response expected)");
+		}
+
+		ret = PX4_OK;
+		break;
+
+	case CfgState::RejectedArmed:
+		PX4_ERR("rejected: vehicle is armed");
+		break;
+
+	case CfgState::Timeout:
+		PX4_ERR("no response from servo (one servo on the bus? correct servo id?)");
+		break;
+
+	case CfgState::Failed:
+		PX4_ERR("request refused by the protocol core");
+		break;
+
+	default:
+		PX4_ERR("driver did not process the request (module running?)");
+		break;
+	}
+
+	_cfg_state.store((int)CfgState::Idle);
+	return ret;
 }
 
 void FbusServo::publishServoStatus(uint64_t now)
@@ -269,8 +398,90 @@ int FbusServo::print_status()
 	return ret;
 }
 
+namespace
+{
+
+// Xact configuration fields addressable by name from the CLI
+const struct {
+	const char *name;
+	uint8_t id;
+} kCfgFields[] = {
+	{"physid", FbusProtocol::XACT_PHYSICAL_ID},
+	{"servoid", FbusProtocol::XACT_SERVO_ID},
+	{"rate", FbusProtocol::XACT_REFRESH_TIMER},
+	{"range", FbusProtocol::XACT_RANGE},
+	{"dir", FbusProtocol::XACT_DIRECTION},
+	{"pulse", FbusProtocol::XACT_PULSE_TYPE},
+	{"channel", FbusProtocol::XACT_CHANNEL_ID},
+	{"center", FbusProtocol::XACT_CENTER},
+};
+
+bool parseCfgField(const char *arg, uint8_t &field)
+{
+	for (const auto &f : kCfgFields) {
+		if (strcmp(arg, f.name) == 0) {
+			field = f.id;
+			return true;
+		}
+	}
+
+	char *end = nullptr;
+	const unsigned long value = strtoul(arg, &end, 0);
+
+	if (end != nullptr && *end == '\0' && value <= 0xFF) {
+		field = (uint8_t)value;
+		return true;
+	}
+
+	return false;
+}
+
+} // namespace
+
 int FbusServo::custom_command(int argc, char **argv)
 {
+	if (argc >= 1 && strcmp(argv[0], "cfg") == 0) {
+		auto *instance = static_cast<FbusServo *>(desc.object.load());
+
+		if (!is_running(desc) || instance == nullptr) {
+			PX4_ERR("not running");
+			return PX4_ERROR;
+		}
+
+		if (argc >= 3 && strcmp(argv[1], "read") == 0) {
+			uint8_t field = 0;
+
+			if (!parseCfgField(argv[2], field)) {
+				return print_usage("unknown field");
+			}
+
+			const uint8_t servo_id = (argc >= 4) ? (uint8_t)strtoul(argv[3], nullptr, 0) : 0;
+			return instance->runConfigRequest(CfgOp::Read, field, 0, servo_id);
+		}
+
+		if (argc >= 4 && strcmp(argv[1], "write") == 0) {
+			uint8_t field = 0;
+
+			if (!parseCfgField(argv[2], field)) {
+				return print_usage("unknown field");
+			}
+
+			// Center is a signed byte (-125..125): encode negatives on 8 bits
+			const long value = strtol(argv[3], nullptr, 0);
+			const uint32_t encoded = (value < 0) ? (uint32_t)(value & 0xFF) : (uint32_t)value;
+
+			const uint8_t servo_id = (argc >= 5) ? (uint8_t)strtoul(argv[4], nullptr, 0) : 0;
+			return instance->runConfigRequest(CfgOp::Write, field, encoded, servo_id);
+		}
+
+		if (argc >= 2 && strcmp(argv[1], "save") == 0) {
+			const uint8_t servo_id = (argc >= 3) ? (uint8_t)strtoul(argv[2], nullptr, 0) : 0;
+			return instance->runConfigRequest(CfgOp::Save, 0, 0, servo_id);
+		}
+
+		return print_usage("usage: fbus cfg read|write|save ...");
+	}
+
 	return print_usage("unknown command");
 }
 
@@ -346,6 +557,10 @@ FBUS_CFG parameter.
 	PRINT_MODULE_USAGE_NAME("fbus", "driver");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("start", "Start the driver");
 	PRINT_MODULE_USAGE_PARAM_STRING('d', nullptr, "<device>", "Serial device", false);
+	PRINT_MODULE_USAGE_COMMAND_DESCR("cfg", "Xact servo configuration (disarmed only, ONE servo on the bus)");
+	PRINT_MODULE_USAGE_ARG("read <field> [servo_id]", "Read a field (physid|servoid|rate|range|dir|pulse|channel|center or numeric id)", true);
+	PRINT_MODULE_USAGE_ARG("write <field> <value> [servo_id]", "Write a field (verify enum order with a read first: Range differs between servo firmwares)", true);
+	PRINT_MODULE_USAGE_ARG("save [servo_id]", "Persist the configuration to the servo flash", true);
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;

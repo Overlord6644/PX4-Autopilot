@@ -57,6 +57,7 @@
 #include <lib/fbus/FbusProtocol.hpp>
 #include <lib/mixer_module/mixer_module.hpp>
 #include <lib/perf/perf_counter.h>
+#include <px4_platform_common/atomic.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/Serial.hpp>
 #include <uORB/Publication.hpp>
@@ -95,6 +96,25 @@ private:
 	void Run() override;
 	void publishServoStatus(uint64_t now);
 
+	// Xact configuration over the CLI (fbus cfg read/write/save): the request
+	// mailbox is filled from the shell thread, executed on the work queue
+	// (disarmed only - a cfg request activates the bus if needed), and the
+	// shell thread polls the state until a terminal value.
+	enum class CfgState : int {
+		Idle = 0,
+		Queued,
+		InFlight,
+		Done,
+		Failed,
+		RejectedArmed,
+		Timeout,
+	};
+
+	enum class CfgOp : uint8_t { Read = 0, Write, Save };
+
+	int runConfigRequest(CfgOp op, uint8_t field, uint32_t value, uint8_t servo_id);	///< shell thread
+	void processConfigRequest(uint64_t now);						///< work queue
+
 	device::Serial _serial{};
 	char _device[32] {};
 
@@ -102,6 +122,17 @@ private:
 	MixingOutput _mixing_output{"FBUS_SV", FBUS_OUTPUT_CHANNELS, *this, MixingOutput::SchedulingPolicy::Disabled, false, false};
 
 	bool _bus_active{false};	///< latched on first armed/prearmed/actuator-test cycle
+
+	// cfg mailbox (single outstanding request, guarded by _cfg_state)
+	px4::atomic<int> _cfg_state{(int)CfgState::Idle};
+	CfgOp _cfg_op{CfgOp::Read};
+	uint8_t _cfg_field{0};
+	uint32_t _cfg_value{0};
+	uint8_t _cfg_servo_id{0};
+	uint8_t _cfg_resp_field{0};
+	uint32_t _cfg_resp_value{0};
+	bool _cfg_resp_received{false};
+	uint64_t _cfg_sent_time{0};
 
 	uORB::Publication<servo_status_s> _servo_status_pub{ORB_ID(servo_status)};
 	uint64_t _last_status_pub{0};
