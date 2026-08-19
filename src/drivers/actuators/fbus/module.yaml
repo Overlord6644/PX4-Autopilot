@@ -1,0 +1,19 @@
+module_name: FBUS
+serial_config:
+    - command: fbus start -d ${SERIAL_DEV}
+      port_config_param:
+        name: FBUS_CFG
+        group: FBUS
+
+actuator_output:
+    output_groups:
+        - param_prefix: FBUS_SV
+          group_label: 'FBUS Servos'
+          channel_label: 'Servo'
+          num_channels: 8
+          standard_params:
+              disarmed: { min: 800, max: 2200, default: 1500 }
+              min: { min: 800, max: 1400, default: 1000 }
+              max: { min: 1600, max: 2200, default: 2000 }
+              center: { min: 800, max: 2200 }
+              failsafe: { min: 800, max: 2200 }

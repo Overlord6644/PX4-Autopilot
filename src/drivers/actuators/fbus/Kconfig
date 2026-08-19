@@ -1,0 +1,6 @@
+menuconfig DRIVERS_ACTUATORS_FBUS
+	bool "fbus (FrSky FBUS servo-bus master)"
+	default n
+	---help---
+		Enable support for FrSky FBUS (F.Port v2) bus servos (Xact W56xx)
+		on a single-wire half-duplex inverted UART at 460800 baud.
