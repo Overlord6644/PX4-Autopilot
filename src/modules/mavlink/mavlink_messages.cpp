@@ -76,6 +76,7 @@
 #include "streams/ESC_INFO.hpp"
 #include "streams/ESC_STATUS.hpp"
 #include "streams/ESTIMATOR_STATUS.hpp"
+#include "streams/SERVO_STATUS.hpp"
 #include "streams/EXTENDED_SYS_STATE.hpp"
 #include "streams/FLIGHT_INFORMATION.hpp"
 #include "streams/GLOBAL_POSITION_SENSOR.hpp"
@@ -475,6 +476,9 @@ static const StreamListItem streams_list[] = {
 #if defined(ESC_STATUS_HPP)
 	create_stream_list_item<MavlinkStreamESCStatus>(),
 #endif // ESC_STATUS_HPP
+#if defined(MAVLINK_MSG_ID_SERVO_STATUS)
+	create_stream_list_item<MavlinkStreamServoStatus>(),
+#endif // MAVLINK_MSG_ID_SERVO_STATUS
 #if defined(ESC_EEPROM_HPP)
 	create_stream_list_item<MavlinkStreamEscEeprom>(),
 #endif // ESC_EEPROM_HPP

@@ -1640,6 +1640,7 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("EFI_STATUS", 2.0f);
 		configure_stream_local("ESC_INFO", 1.0f);
 		configure_stream_local("ESC_STATUS", 1.0f);
+		configure_stream_local("SERVO_STATUS", 1.0f);
 #if defined(MAVLINK_MSG_ID_ESC_EEPROM)
 		configure_stream_local("ESC_EEPROM", unlimited_rate);
 #endif
@@ -1710,6 +1711,7 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("DISTANCE_SENSOR", 10.0f);
 		configure_stream_local("ESC_INFO", 10.0f);
 		configure_stream_local("ESC_STATUS", 10.0f);
+		configure_stream_local("SERVO_STATUS", 10.0f);
 #if defined(MAVLINK_MSG_ID_ESC_EEPROM)
 		configure_stream_local("ESC_EEPROM", unlimited_rate);
 #endif
@@ -1894,6 +1896,7 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("EFI_STATUS", 10.0f);
 		configure_stream_local("ESC_INFO", 10.0f);
 		configure_stream_local("ESC_STATUS", 10.0f);
+		configure_stream_local("SERVO_STATUS", 10.0f);
 #if defined(MAVLINK_MSG_ID_ESC_EEPROM)
 		configure_stream_local("ESC_EEPROM", unlimited_rate);
 #endif
@@ -1995,6 +1998,7 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("GIMBAL_DEVICE_SET_ATTITUDE", 5.0f);
 		configure_stream_local("ESC_INFO", 1.0f);
 		configure_stream_local("ESC_STATUS", 5.0f);
+		configure_stream_local("SERVO_STATUS", 5.0f);
 #if defined(MAVLINK_MSG_ID_ESC_EEPROM)
 		configure_stream_local("ESC_EEPROM", unlimited_rate);
 #endif
@@ -2063,6 +2067,7 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("GIMBAL_DEVICE_SET_ATTITUDE", 2.0f);
 		configure_stream_local("ESC_INFO", 1.0f);
 		configure_stream_local("ESC_STATUS", 1.0f);
+		configure_stream_local("SERVO_STATUS", 1.0f);
 #if defined(MAVLINK_MSG_ID_ESC_EEPROM)
 		configure_stream_local("ESC_EEPROM", unlimited_rate);
 #endif
