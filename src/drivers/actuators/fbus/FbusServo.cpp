@@ -48,7 +48,7 @@ ModuleBase::Descriptor FbusServo::desc{
 };
 
 FbusServo::FbusServo(const char *device) :
-	OutputModuleInterface(MODULE_NAME, px4::serial_port_to_wq(device)),
+	OutputModuleInterface(MODULE_NAME, px4::wq_configurations::hp_default),
 	_cycle_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")},
 	_frame_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": frame interval")}
 {
@@ -92,7 +92,10 @@ int FbusServo::init()
 
 	_fbus.reset(hrt_absolute_time());
 
-	ScheduleOnInterval(SCHEDULE_INTERVAL_US);
+	// Self-chaining schedule (ScheduleDelayed at the end of each Run): on the
+	// fmu-v6xrt bench, an interval registered from the boot context via
+	// ScheduleOnInterval never fired (item attached, period set, 0 runs).
+	ScheduleNow();
 
 	PX4_INFO("FBUS master on %s, %lu baud, bus silent until armed/prearmed/actuator test",
 		 _device, (unsigned long)FbusProtocol::BAUDRATE);
@@ -164,6 +167,10 @@ void FbusServo::Run()
 	_mixing_output.updateSubscriptions(false);
 
 	perf_end(_cycle_perf);
+
+	// Re-arm the loop (self-chaining keeps the cadence independent of any
+	// uORB callback and of the periodic hrt registration path)
+	ScheduleDelayed(SCHEDULE_INTERVAL_US);
 }
 
 void FbusServo::processConfigRequest(uint64_t now)
