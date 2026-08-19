@@ -68,14 +68,29 @@ FbusServo::~FbusServo()
 
 int FbusServo::init()
 {
-	if (!_serial.setPort(_device)) {
-		PX4_ERR("error configuring serial device %s", _device);
-		return PX4_ERROR;
-	}
+	// The serial port is opened lazily from Run(): NuttX file descriptors are
+	// per task group, so an fd opened here (startup/shell task) would not be
+	// usable from the work queue thread - reads and writes would hit whatever
+	// that fd number means in the wq task group (observed as EINVAL/ENOTTY on
+	// the fmu-v6xrt bench). Same pattern as crsf_rc/dshot telemetry.
+	ScheduleNow();
 
-	if (!_serial.setBaudrate(FbusProtocol::BAUDRATE)) {
-		PX4_ERR("error setting baudrate %lu on %s", (unsigned long)FbusProtocol::BAUDRATE, _device);
-		return PX4_ERROR;
+	PX4_INFO("FBUS master on %s, %lu baud, bus silent until armed/prearmed/actuator test",
+		 _device, (unsigned long)FbusProtocol::BAUDRATE);
+
+	return PX4_OK;
+}
+
+bool FbusServo::openSerial()
+{
+	if (!_serial.setPort(_device)
+	    || !_serial.setBaudrate(FbusProtocol::BAUDRATE)) {
+		if (!_open_fail_logged) {
+			_open_fail_logged = true;
+			PX4_ERR("error configuring serial device %s", _device);
+		}
+
+		return false;
 	}
 
 	// FBUS is a single-wire half-duplex inverted bus on the port's TX pin.
@@ -90,21 +105,17 @@ int FbusServo::init()
 	}
 
 	if (!_serial.open()) {
-		PX4_ERR("error opening serial device %s", _device);
-		return PX4_ERROR;
+		if (!_open_fail_logged) {
+			_open_fail_logged = true;
+			PX4_ERR("error opening serial device %s", _device);
+		}
+
+		return false;
 	}
 
+	PX4_INFO("%s opened (singlewire: %d, invert: %d)", _device, _opt_singlewire, _opt_invert);
 	_fbus.reset(hrt_absolute_time());
-
-	// Self-chaining schedule (ScheduleDelayed at the end of each Run): on the
-	// fmu-v6xrt bench, an interval registered from the boot context via
-	// ScheduleOnInterval never fired (item attached, period set, 0 runs).
-	ScheduleNow();
-
-	PX4_INFO("FBUS master on %s, %lu baud, bus silent until armed/prearmed/actuator test",
-		 _device, (unsigned long)FbusProtocol::BAUDRATE);
-
-	return PX4_OK;
+	return true;
 }
 
 void FbusServo::Run()
@@ -121,6 +132,15 @@ void FbusServo::Run()
 
 	if (!_first_run_done) {
 		PX4_INFO("first cycle: enter");
+	}
+
+	// Lazy open on the work queue thread (see init() for why); retry at 1 Hz
+	if (!_serial.isOpen()) {
+		if (!openSerial()) {
+			perf_end(_cycle_perf);
+			ScheduleDelayed(1000000);
+			return;
+		}
 	}
 
 	// Drain the UART (TX echo included; the protocol's adaptive filter eats it).
@@ -400,9 +420,10 @@ int FbusServo::print_status()
 
 	PX4_INFO("device: %s @ %lu baud (singlewire: %d, invert: %d)", _device,
 		 (unsigned long)FbusProtocol::BAUDRATE, _opt_singlewire, _opt_invert);
-	PX4_INFO("writes failed: %lu, last ret %d errno %d, tx space now %d",
-		 (unsigned long)_failed_writes, (int)_last_write_ret, _last_write_errno,
-		 (int)_serial.txSpaceAvailable());
+	// No live _serial calls here: status runs on the shell thread and NuttX
+	// fds are per task group - the port belongs to the work queue thread.
+	PX4_INFO("writes failed: %lu, last ret %d errno %d",
+		 (unsigned long)_failed_writes, (int)_last_write_ret, _last_write_errno);
 	PX4_INFO("bus active: %s", _bus_active ? "yes (transmitting)" : "no (silent until armed/prearmed/test)");
 
 	const char *echo = "unknown";

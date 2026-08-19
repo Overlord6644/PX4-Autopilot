@@ -81,6 +81,7 @@ public:
 
 	int init();
 	int print_status() override;
+	bool openSerial();
 
 	bool updateOutputs(float outputs[MAX_ACTUATORS], unsigned num_outputs,
 			   unsigned num_control_groups_updated) override;
@@ -124,6 +125,7 @@ private:
 	bool _bus_active{false};	///< latched on first armed/prearmed/actuator-test cycle
 	bool _first_run_done{false};
 	bool _write_fail_logged{false};
+	bool _open_fail_logged{false};
 
 	// Bench isolation switches (start options -w / -i)
 	bool _opt_singlewire{true};
