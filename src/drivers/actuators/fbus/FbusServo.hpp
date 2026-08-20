@@ -155,4 +155,8 @@ private:
 
 	perf_counter_t _cycle_perf;
 	perf_counter_t _frame_perf;
+
+	DEFINE_PARAMETERS(
+		(ParamInt<px4::params::FBUS_BUS_MODE>) _param_bus_mode
+	)
 };

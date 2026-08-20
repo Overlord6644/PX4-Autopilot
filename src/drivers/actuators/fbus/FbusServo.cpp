@@ -182,7 +182,8 @@ void FbusServo::Run()
 	if (!_bus_active) {
 		const actuator_armed_s &armed = _mixing_output.armed();
 
-		if (armed.armed || armed.prearmed || _mixing_output.isActuatorTestRunning()) {
+		if (_param_bus_mode.get() == 1
+		    || armed.armed || armed.prearmed || _mixing_output.isActuatorTestRunning()) {
 			_bus_active = true;
 			_fbus.reset(now);
 			PX4_INFO("bus activated");

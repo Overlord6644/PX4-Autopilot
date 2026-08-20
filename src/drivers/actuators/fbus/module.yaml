@@ -5,6 +5,27 @@ serial_config:
         name: FBUS_CFG
         group: FBUS
 
+parameters:
+    - group: FBUS
+      definitions:
+        FBUS_BUS_MODE:
+          description:
+            short: FBUS bus activation mode
+            long: |
+              An FBUS servo arms on the first CONTROL frame it receives and can
+              never be returned to limp over the bus (only a power cycle of the
+              servo rail releases it). Silent-until-armed keeps servos limp
+              until the vehicle is armed or prearmed, an actuator test runs or
+              a cfg command is issued - but the servos stay invisible
+              (no discovery, no telemetry) until then. Always-on starts the
+              bus at boot: servos are discovered and report telemetry
+              immediately, and anything attached to the bus arms at power-up.
+          type: enum
+          values:
+            0: Silent until armed
+            1: Always on from boot
+          default: 0
+
 actuator_output:
     output_groups:
         - param_prefix: FBUS_SV
