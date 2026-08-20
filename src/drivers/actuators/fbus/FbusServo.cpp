@@ -368,15 +368,23 @@ void FbusServo::publishServoStatus(uint64_t now)
 {
 	servo_status_s status{};
 
-	status.counter = _status_counter++;
-	status.servo_count = FBUS_OUTPUT_CHANNELS;
+	status.counter = _status_counter;
 	status.connection_type = servo_status_s::CONNECTION_TYPE_FBUS;
 
-	// By provisioning convention the Xact servoId equals the FBUS channel it
-	// follows, so telemetry slot i reports on output channel i.
+	// Compact filling (esc_status pattern): only channels with an assigned
+	// output function get a slot, identified by actuator_function - no point
+	// logging rows of empty placeholders. By provisioning convention the Xact
+	// servoId equals the FBUS channel it follows, so channel i's telemetry
+	// comes from telemetry slot i.
+	uint8_t count = 0;
+
 	for (uint8_t i = 0; i < FBUS_OUTPUT_CHANNELS; i++) {
-		servo_report_s &report = status.servo[i];
-		report.actuator_function = (uint8_t)_mixing_output.outputFunction(i);
+		if (!_mixing_output.isFunctionSet(i)) {
+			continue;
+		}
+
+		servo_report_s &report = status.servo[count];
+		report.actuator_function = (uint16_t)_mixing_output.outputFunction(i);
 
 		FbusProtocol::ServoTelemetry telem{};
 
@@ -386,18 +394,29 @@ void FbusServo::publishServoStatus(uint64_t now)
 			report.temperature_degc = telem.temperature_c;
 			report.telemetry_online = true;
 			report.timestamp = telem.last_update_us;
-			status.servo_online_flags |= (uint16_t)(1u << i);
+			status.servo_online_flags |= (uint16_t)(1u << count);
 
 		} else {
 			report.temperature_degc = INT16_MIN;
 			report.telemetry_online = false;
 			report.timestamp = now;
 		}
+
+		count++;
 	}
 
+	_last_status_pub = now;
+
+	if (count == 0) {
+		// Nothing mapped (e.g. cfg-only bench session): don't fill the log
+		// with empty placeholders; the CLI status still shows raw telemetry.
+		return;
+	}
+
+	status.servo_count = count;
+	_status_counter++;
 	status.timestamp = hrt_absolute_time();
 	_servo_status_pub.publish(status);
-	_last_status_pub = now;
 }
 
 bool FbusServo::updateOutputs(float outputs[MAX_ACTUATORS], unsigned num_outputs,
